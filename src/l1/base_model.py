@@ -107,10 +107,14 @@ class L1BaseModel:
         hooks = []
         # 只记录最后一层的隐藏状态和注意力图，减少内存使用
         last_layer_idx = len(self.model.model.layers) - 1
+        
+        # 导入functools
+        import functools
+        
         for i, layer in enumerate(self.model.model.layers):
             if i == last_layer_idx:
                 # 记录隐藏状态
-                def hook_fn_hidden(module, input, output, layer_idx=i):
+                def hook_fn_hidden(module, input, output, layer_idx):
                     # 分段平均池化，每16个token一个向量
                     hidden_state = output[0].detach().cpu().numpy()
                     batch_size, seq_len, hidden_dim = hidden_state.shape
@@ -131,7 +135,7 @@ class L1BaseModel:
                     self.hidden_states.append(np.array(pooled_hidden))
                 
                 # 记录注意力图
-                def hook_fn_attention(module, input, output, layer_idx=i):
+                def hook_fn_attention(module, input, output, layer_idx):
                     attention = output[1].detach().cpu().numpy()  # (batch, heads, seq_len, seq_len)
                     batch_size, num_heads, seq_len, _ = attention.shape
                     
@@ -167,10 +171,12 @@ class L1BaseModel:
                         "top_tokens": top_tokens
                     })
                 
-                # 注册钩子
-                hooks.append(layer.register_forward_hook(hook_fn_hidden))
+                # 注册钩子，使用functools.partial绑定layer_idx
+                hook_hidden = functools.partial(hook_fn_hidden, layer_idx=i)
+                hooks.append(layer.register_forward_hook(hook_hidden))
                 if hasattr(layer.self_attention, "attention"):
-                    hooks.append(layer.self_attention.attention.register_forward_hook(hook_fn_attention))
+                    hook_attention = functools.partial(hook_fn_attention, layer_idx=i)
+                    hooks.append(layer.self_attention.attention.register_forward_hook(hook_attention))
         
         # 生成回答
         with torch.no_grad():
