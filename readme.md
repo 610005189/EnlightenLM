@@ -46,7 +46,7 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/your-username/EnlightenLM.git
+git clone https://github.com/610005189/EnlightenLM.git
 cd EnlightenLM
 
 # 安装依赖
@@ -193,4 +193,4 @@ MIT License
 
 ## 联系方式
 
-- GitHub Issues: https://github.com/your-username/EnlightenLM/issues
+- GitHub Issues: https://github.com/610005189/EnlightenLM/issues
