@@ -1,0 +1,119 @@
+# 系统配置
+system:
+  # 系统名称
+  name: "觉悟三层架构"
+  # 版本
+  version: "2.1"
+  # 运行模式: development, production
+  mode: "development"
+
+# L1 基座模型配置
+l1:
+  # 模型路径或名称
+  model_name: "Qwen/Qwen2-7B"
+  # 设备: cpu, cuda, cuda:0, etc.
+  device: "cuda"
+  # 推理参数
+  inference:
+    temperature: 0.7
+    max_new_tokens: 512
+    top_p: 0.9
+  # 注意力偏置配置
+  attention_bias:
+    # 低秩分解的秩
+    rank: 8
+    # 偏置应用策略: layer-wise, head-wise
+    strategy: "layer-wise"
+
+# L2 自描述小模型配置
+l2:
+  # 模型路径或名称
+  model_name: "distilbert-base-uncased"
+  # 设备
+  device: "cuda"
+  # 推理参数
+  inference:
+    max_new_tokens: 256
+    temperature: 0.6
+  # 截断控制器配置
+  cutoff_controller:
+    # 跨轮次递归深度限制
+    cross_depth_limit: 1
+    # 语义相似度阈值
+    semantic_similarity_threshold: 0.85
+    # 自我参照权重初始值
+    self_reference_weight: 1.0
+    # 自我参照权重最小值
+    self_reference_weight_min: 0.1
+    # 短语重复次数限制
+    phrase_repetition_limit: 3
+
+# L3 元注意力控制器配置
+l3:
+  # 模型路径或名称
+  model_name: "google/bert-mini-uncased"
+  # 设备
+  device: "cuda"
+  # 核心价值观偏置配置
+  core_values:
+    # 敏感词表路径
+    negative_vocab_path: "config/negative_vocab.txt"
+    # 增强词表路径
+    positive_vocab_path: "config/positive_vocab.txt"
+    # 负向偏置强度
+    negative_bias: -1e9
+    # 正向偏置强度
+    positive_bias: 2.0
+  # 用户参数配置
+  user_params:
+    # 创造力参数范围
+    creativity_range: [-1, 1]
+    # 细节关注度范围
+    detail_attention_range: [0, 1]
+    # 安全余量范围
+    safety_margin_range: [0.3, 1]
+    # 角色预设选项
+    role_presets: ["teacher", "assistant", "analyst"]
+
+# 审计日志配置
+audit:
+  # 日志存储路径
+  storage_path: "logs/audit"
+  # 压缩配置
+  compression:
+    # 语义去重
+    semantic_deduplication: true
+    # 列式存储
+    columnar_storage: true
+    # 块级聚合
+    block_aggregation: true
+  # 哈希链配置
+  hash_chain:
+    # 哈希算法: sha256, sha512
+    algorithm: "sha256"
+    # 初始哈希
+    initial_hash: "0000000000000000000000000000000000000000000000000000000000000000"
+  # 安全隔离配置
+  security:
+    # 启用安全隔离: true, false
+    enabled: false
+    # 隔离区类型: sgx, sev, process
+    type: "process"
+
+# API 配置
+api:
+  # 主机
+  host: "0.0.0.0"
+  # 端口
+  port: 8000
+  # 启用CORS: true, false
+  cors: true
+  # 允许的源
+  allowed_origins: ["*"]
+
+# 监控配置
+monitoring:
+  # 启用监控: true, false
+  enabled: true
+  # 监控端口
+  port: 8001
