@@ -56,3 +56,6 @@ model_weights/
 *.tmp
 *.temp
 .cache/
+
+# Article files
+doc/article/
