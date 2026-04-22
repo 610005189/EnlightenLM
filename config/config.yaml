@@ -10,9 +10,9 @@ system:
 # L1 基座模型配置
 l1:
   # 模型路径或名称
-  model_name: "Qwen/Qwen2-7B"
+  model_name: "distilgpt2"
   # 设备: cpu, cuda, cuda:0, etc.
-  device: "cuda"
+  device: "cpu"
   # 推理参数
   inference:
     temperature: 0.7
@@ -30,7 +30,7 @@ l2:
   # 模型路径或名称
   model_name: "distilbert-base-uncased"
   # 设备
-  device: "cuda"
+  device: "cpu"
   # 推理参数
   inference:
     max_new_tokens: 256
@@ -53,7 +53,7 @@ l3:
   # 模型路径或名称
   model_name: "google/bert-mini-uncased"
   # 设备
-  device: "cuda"
+  device: "cpu"
   # 核心价值观偏置配置
   core_values:
     # 敏感词表路径

@@ -1,0 +1,159 @@
+# EnlightenLM 核心价值观配置
+# Core Rules Configuration
+
+version: "1.0"
+last_updated: "2026-04-23"
+
+# 负向词汇表 (Negative Vocabulary)
+# 这些词汇会触发强负偏置，模型会主动避免生成相关内容
+negative_vocab:
+  # 暴力相关内容
+  violence:
+    - 暴力
+    - 殴打
+    - 伤害
+    - 杀人
+    - 武器
+    - 恐怖
+    - 袭击
+    - 谋杀
+
+  # 色情相关内容
+  sexual:
+    - 色情
+    - 淫秽
+    - 性骚扰
+    - 不雅
+    - 裸体
+
+  # 歧视相关内容
+  discrimination:
+    - 歧视
+    - 偏见
+    - 种族主义
+    - 性别歧视
+    - 年龄歧视
+
+  # 违法犯罪相关内容
+  illegal:
+    - 毒品
+    - 赌博
+    - 诈骗
+    - 盗窃
+    - 走私
+    - 洗钱
+
+  # 有害信息
+  harmful:
+    - 自杀
+    - 自残
+    - 厌食
+    - 暴食
+
+# 正向词汇表 (Positive Vocabulary)
+# 这些词汇会触发弱正偏置，鼓励生成相关内容
+positive_vocab:
+  # 和平友爱
+  peace_love:
+    - 和平
+    - 友爱
+    - 善良
+    - 互助
+    - 关爱
+
+  # 正义公平
+  justice:
+    - 正义
+    - 公平
+    - 公正
+    - 诚信
+    - 透明
+
+  # 积极向上
+  positive:
+    - 积极
+    - 乐观
+    - 努力
+    - 奋斗
+    - 进步
+
+  # 知识科学
+  knowledge:
+    - 科学
+    - 知识
+    - 理性
+    - 智慧
+    - 创新
+
+# 偏置强度配置
+bias_strength:
+  # 负向偏置强度 (强负偏置，阻止生成)
+  negative: -1e9
+
+  # 正向偏置强度 (弱正偏置，鼓励生成)
+  positive: 2.0
+
+# 特殊token处理
+exception_tokens:
+  - token: "[PAD]"
+    action: "ignore"
+    description: "填充token，不参与注意力计算"
+
+  - token: "[UNK]"
+    action: "mask"
+    description: "未知token，强制mask"
+
+  - token: "[CLS]"
+    action: "use"
+    description: "分类token，用于池化输出"
+
+  - token: "[SEP]"
+    action: "use"
+    description: "分隔token，用于句子边界"
+
+# 敏感话题检测规则
+sensitive_topics:
+  politics:
+    keywords:
+      - 政治
+      - 选举
+      - 政府
+      - 政党
+    risk_level: "medium"
+    response: "redirect"
+
+  finance:
+    keywords:
+      - 投资
+      - 股票
+      - 理财
+      - 税务
+    risk_level: "high"
+    response: "warn"
+
+  health:
+    keywords:
+      - 医疗
+      - 药物
+      - 手术
+      - 疾病
+    risk_level: "medium"
+    response: "disclaimer"
+
+# VAN事件优先级配置
+van_priority:
+  # 立即截断的事件类型
+  immediate_cutoff:
+    - "violence_content"
+    - "illegal_activity"
+    - "harmful_instruction"
+
+  # 警告后继续的事件类型
+  warn_and_continue:
+    - "sensitive_topic"
+    - "political_content"
+
+  # 记录但不干预的事件类型
+  log_only:
+    - "personal_data"
+    - "privacy_mention"

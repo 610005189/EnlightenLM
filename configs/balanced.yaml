@@ -1,0 +1,51 @@
+enlighten:
+  mode: "balanced"
+  description: "Balanced模式 - 平衡安全性和性能，使用中等VAN检测"
+
+  components:
+    van_stream:
+      level: "medium"  # light | medium | full
+      van_threshold: 0.9
+      sensitive_keywords:
+        - "暴力"
+        - "犯罪"
+        - "毒品"
+        - "赌博"
+
+    gate_fusion:
+      enabled: true
+      fusion_threshold: 0.7
+
+    dmn_noise:
+      enabled: false
+
+    working_memory:
+      capacity: 512
+      refresh_interval: 32
+      use_topk_refresh: true
+      embedding_dim: 1024
+
+    entropy_monitor:
+      window_size: 20
+      alert_threshold: 0.3
+
+    cutoff:
+      low_entropy_threshold: 0.5
+      low_variance_threshold: 0.05
+      min_duration: 5
+      cooldown_steps: 10
+      flicker_window_size: 5
+      flicker_threshold: 0.6
+
+    async_review:
+      enabled: false
+
+  performance:
+    target_latency_overhead: 0.10  # +10%
+    target_memory_overhead_gb: 1.0
+    target_repetition_rate: 0.03  # <3%
+
+  logging:
+    level: "WARNING"
+    log_decisions: false
+    log_history_size: 100

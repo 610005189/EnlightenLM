@@ -1,0 +1,48 @@
+enlighten:
+  mode: "lightweight"
+  description: "Lightweight模式 - 最小开销，仅使用关键词匹配"
+
+  components:
+    van_stream:
+      level: "light"  # light | medium | full
+      van_threshold: 0.9
+      sensitive_keywords:
+        - "暴力"
+        - "犯罪"
+
+    gate_fusion:
+      enabled: false
+
+    dmn_noise:
+      enabled: false
+
+    working_memory:
+      capacity: 256
+      refresh_interval: 0  # 不刷新
+      use_topk_refresh: false
+      embedding_dim: 768
+
+    entropy_monitor:
+      window_size: 20
+      alert_threshold: 0.3
+
+    cutoff:
+      low_entropy_threshold: 0.5
+      low_variance_threshold: 0.05
+      min_duration: 5
+      cooldown_steps: 5
+      flicker_window_size: 3
+      flicker_threshold: 0.5
+
+    async_review:
+      enabled: false
+
+  performance:
+    target_latency_overhead: 0.05  # +5%
+    target_memory_overhead_gb: 0.5
+    target_repetition_rate: 0.05  # <5%
+
+  logging:
+    level: "ERROR"
+    log_decisions: false
+    log_history_size: 10
