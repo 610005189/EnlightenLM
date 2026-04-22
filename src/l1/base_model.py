@@ -42,6 +42,10 @@ class L1BaseModel:
         # 真实模型加载状态
         self.real_model_loaded = False
         
+        # 注意力钩子注册
+        self.attention_hooks = []
+        self.hook_handles = []
+        
         # 根据配置选择加载模式
         if self.use_mock or self.offline_mode:
             logger.info(f"Using mock L1 model: {self.model_name} on {self.device} (offline_mode={self.offline_mode})")
@@ -78,8 +82,11 @@ class L1BaseModel:
             self.real_model_loaded = True
             logger.info(f"Real model {self.model_name} loaded successfully")
             
+            # 注册注意力钩子
+            self._register_attention_hooks()
+            
         except Exception as e:
-            logger.warning(f"Failed to load real model: {e}. Falling back to mock model.")
+            logger.warning(f"Failed to load real model {self.model_name}: {type(e).__name__}: {str(e)}. Falling back to mock model.")
             self._setup_mock_model()
     
     def _setup_mock_model(self):
@@ -154,6 +161,7 @@ class L1BaseModel:
                 self.tokenizer = tokenizer
                 self.device = device
                 self._hidden_state = torch.randn(1, 10, 768)
+                self._attention_weights = torch.randn(1, 12, 10, 10)
             
             def to(self, device):
                 self.device = device
@@ -165,6 +173,8 @@ class L1BaseModel:
             def __call__(self, input_ids, attention_mask=None, output_hidden_states=False):
                 class Output:
                     last_hidden_state = torch.randn(1, input_ids.shape[1], 768)
+                    hidden_states = tuple(torch.randn(1, input_ids.shape[1], 768) for _ in range(6))
+                    attentions = tuple(torch.randn(1, 12, input_ids.shape[1], input_ids.shape[1]) for _ in range(6))
                 return Output()
             
             def generate(self, input_ids, **kwargs):
@@ -185,9 +195,54 @@ class L1BaseModel:
             
             def get_hidden_state(self):
                 return self._hidden_state
+            
+            def get_attention_weights(self):
+                return self._attention_weights
         
         self.tokenizer = MockTokenizer(vocab)
         self.model = MockModel(self.tokenizer, self.device)
+    
+    def _register_attention_hooks(self):
+        """
+        注册注意力钩子，用于记录注意力权重和隐藏状态
+        """
+        # 清除旧钩子
+        for handle in self.hook_handles:
+            handle.remove()
+        self.hook_handles.clear()
+        
+        # 注册新钩子
+        def create_hook(name):
+            def hook(module, input, output):
+                # 记录注意力权重
+                if hasattr(output, 'attentions') and output.attentions is not None:
+                    self.attention_maps.append(output.attentions)
+                elif hasattr(output, 'hidden_states') and output.hidden_states is not None:
+                    self.hidden_states.append(output.hidden_states)
+                # 兼容不同架构
+                elif isinstance(output, tuple) and len(output) > 1:
+                    # 假设第二个是注意力
+                    if output[1] is not None:
+                        self.attention_maps.append(output[1])
+            return hook
+        
+        # 尝试找到注意力层并注册钩子
+        # 这是一个通用的尝试，不同的模型架构可能需要不同的方法
+        if hasattr(self.model, 'transformer'):
+            for i, layer in enumerate(self.model.transformer.h):
+                if hasattr(layer, 'attn'):
+                    handle = layer.attn.register_forward_hook(create_hook(f"layer_{i}_attn"))
+                    self.hook_handles.append(handle)
+        elif hasattr(self.model, 'model'):
+            # 其他架构的尝试
+            try:
+                if hasattr(self.model.model, 'layers'):
+                    for i, layer in enumerate(self.model.model.layers):
+                        if hasattr(layer, 'self_attn'):
+                            handle = layer.self_attn.register_forward_hook(create_hook(f"layer_{i}_self_attn"))
+                            self.hook_handles.append(handle)
+            except Exception as e:
+                logger.warning(f"Could not register attention hooks: {e}")
     
     def _optimize_memory(self):
         """
@@ -209,6 +264,7 @@ class L1BaseModel:
         Returns:
             生成的回答和内部状态快照
         """
+        # 清空旧状态
         self.hidden_states = []
         self.attention_maps = []
         self.generated_tokens = []
@@ -220,22 +276,56 @@ class L1BaseModel:
         temperature = self.inference_config.get("temperature", 0.7)
         top_p = self.inference_config.get("top_p", 0.9)
         
+        # 首先进行一次前向传播来收集注意力和隐藏状态
         with torch.no_grad():
+            # 尝试获取隐藏状态和注意力权重
+            if self.real_model_loaded:
+                initial_output = self.model(
+                    input_ids, 
+                    output_hidden_states=True, 
+                    output_attentions=True
+                )
+                if hasattr(initial_output, 'hidden_states'):
+                    self.hidden_states = list(initial_output.hidden_states)
+                if hasattr(initial_output, 'attentions'):
+                    self.attention_maps = list(initial_output.attentions)
+            else:
+                # 模拟模型的情况
+                initial_output = self.model(input_ids, output_hidden_states=True)
+                if hasattr(initial_output, 'hidden_states'):
+                    self.hidden_states = list(initial_output.hidden_states)
+                if hasattr(initial_output, 'attentions'):
+                    self.attention_maps = list(initial_output.attentions)
+                elif hasattr(self.model, 'get_hidden_state'):
+                    self.hidden_states = [self.model.get_hidden_state()]
+                elif hasattr(self.model, 'get_attention_weights'):
+                    self.attention_maps = [self.model.get_attention_weights()]
+            
+            # 生成token
             output = self.model.generate(
                 input_ids,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
                 top_p=top_p,
-                pad_token_id=self.tokenizer.pad_token_id
+                pad_token_id=self.tokenizer.pad_token_id,
+                return_dict_in_generate=True,
+                output_hidden_states=True
             )
+            
+            # 处理输出
+            if hasattr(output, 'sequences'):
+                generated_ids = output.sequences[0]
+            else:
+                generated_ids = output[0]
+            
+            # 如果是return_dict_in_generate的话，获取中间的hidden_states
+            if hasattr(output, 'hidden_states') and output.hidden_states:
+                self.hidden_states.extend(output.hidden_states)
         
-        output_text = self.tokenizer.decode(output[0], skip_special_tokens=True)
+        output_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        self.generated_tokens = generated_ids.tolist()
         
-        self.generated_tokens = output[0].tolist()
-        
-        if hasattr(self.model, 'get_hidden_state'):
-            self.hidden_states = [self.model.get_hidden_state()]
-        
+        # 构建快照
         snapshot = {
             "input_text": input_text,
             "output_text": output_text,
@@ -247,10 +337,53 @@ class L1BaseModel:
                 "temperature": temperature,
                 "top_p": top_p
             },
-            "model_mode": "mock" if not self.real_model_loaded else "real"
+            "model_mode": "mock" if not self.real_model_loaded else "real",
+            # 新增：为L2元描述生成准备的摘要信息
+            "attention_summaries": self._create_attention_summaries()
         }
         
         return output_text, snapshot
+    
+    def _create_attention_summaries(self) -> List[Dict]:
+        """
+        从记录的注意力图中创建摘要，用于L2元描述生成
+        
+        Returns:
+            注意力摘要列表
+        """
+        summaries = []
+        
+        if not self.attention_maps:
+            return summaries
+        
+        # 对每一层的注意力计算摘要
+        for i, layer_attn in enumerate(self.attention_maps):
+            # 取这一层注意力的平均
+            if isinstance(layer_attn, tuple):
+                # 多头注意力，取平均
+                attn = layer_attn[0] if layer_attn else None
+            else:
+                attn = layer_attn
+            
+            if attn is not None and isinstance(attn, torch.Tensor):
+                # 计算这一层的平均注意力熵
+                attn_np = attn.cpu().numpy()
+                entropy = -np.sum(
+                    attn_np * np.log(attn_np + 1e-10),
+                    axis=-1
+                ).mean()
+                
+                # 找到注意力最大的token
+                if attn_np.ndim >= 2:
+                    top_token_idx = np.argmax(attn_np.mean(axis=0) if attn_np.ndim >= 3 else attn_np)
+                    summaries.append({
+                        "layer": i,
+                        "avg_entropy": float(entropy),
+                        "top_tokens": [int(top_token_idx)],
+                        "weights": [float(attn_np.max())]
+                    })
+        
+        return summaries
     
     def generate_batch(self, input_texts: List[str], biases: Optional[List[Dict]] = None) -> List[Tuple[str, Dict]]:
         """
@@ -272,7 +405,9 @@ class L1BaseModel:
         """
         注入注意力偏置
         """
-        pass
+        # 这里实现简单的注意力偏置注入
+        # 实际应用中会更复杂
+        logger.info(f"Injecting attention bias: {bias}")
     
     def get_memory_usage(self) -> Dict:
         """
@@ -297,3 +432,21 @@ class L1BaseModel:
         检查是否加载了真实模型
         """
         return self.real_model_loaded
+    
+    def cleanup(self):
+        """
+        清理资源
+        """
+        # 移除注意力钩子
+        for handle in self.hook_handles:
+            handle.remove()
+        self.hook_handles.clear()
+        
+        # 清空内存
+        self.hidden_states = []
+        self.attention_maps = []
+        self.generated_tokens = []
+        
+        # 如果是CUDA设备，释放显存
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
