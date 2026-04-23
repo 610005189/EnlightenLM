@@ -20,42 +20,35 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual environments
+# Virtual Environment
 venv/
 ENV/
 env/
-.venv
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
 # Logs
 *.log
 logs/
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Model files (large)
-*.bin
-*.pt
-*.pth
-*.onnx
-model_weights/
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
 
 # Environment variables
 .env
 .env.local
 
+# OS
+.DS_Store
+Thumbs.db
+
 # Temporary files
 *.tmp
 *.temp
-.cache/
-
-# Article files
-doc/article/

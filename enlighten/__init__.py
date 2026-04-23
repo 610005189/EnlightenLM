@@ -3,26 +3,48 @@ EnlightenLM - 觉悟三层架构
 基于认知神经科学的大模型安全推理与元认知框架
 
 主要组件:
-- L1Generation: L1生成层 (双流注意力 + DMN抑制)
-- L2WorkingMemory: L2工作记忆层 (稀疏注意力 + 熵追踪)
-- L3Controller: L3元控制器 (熵监控 + 截断决策)
+- HybridEnlightenLM: 核心架构实现（API + 本地模型）
+- WorkingMemoryManager: L2工作记忆层
+- VANMonitor: L3安全监控
+- API Server: FastAPI 服务
 """
 
-__version__ = "2.1.0"
+__version__ = "2.3.0"
 
-from .l1_generation import L1Generation
-from .l2_working_memory import L2WorkingMemory
-from .l3_controller import L3Controller
-from .main import EnlightenLM
-from .config import EnlightenMode, ModeConfig, load_config, ConfigManager
+from .hybrid_architecture import (
+    HybridEnlightenLM,
+    GenerationResult,
+    WorkingMemoryManager,
+    AttentionStats,
+    VANMonitor,
+)
+from .config.modes import (
+    EnlightenMode,
+    ModeConfig,
+    WorkingMemoryConfig,
+    EntropyMonitorConfig,
+    CutoffConfig,
+    ModelProviderConfig,
+)
+from .config.loader import load_config, ConfigManager
 
 __all__ = [
-    "L1Generation",
-    "L2WorkingMemory",
-    "L3Controller",
-    "EnlightenLM",
+    # 核心类
+    "HybridEnlightenLM",
+    "WorkingMemoryManager",
+    "VANMonitor",
+    
+    # 数据类
+    "GenerationResult",
+    "AttentionStats",
+    
+    # 配置
     "EnlightenMode",
     "ModeConfig",
+    "WorkingMemoryConfig",
+    "EntropyMonitorConfig",
+    "CutoffConfig",
+    "ModelProviderConfig",
     "load_config",
     "ConfigManager",
 ]

@@ -21,7 +21,7 @@ import os
 
 from .hybrid_architecture import HybridEnlightenLM, GenerationResult
 from .api.deepseek_client import DeepSeekAPIClient, DeepSeekConfig
-from .config import load_config, ModeConfig
+from .config.modes import load_config, ModeConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -428,8 +428,22 @@ def run_server(host: str = "0.0.0.0", port: int = 8000):
         host: 主机地址
         port: 端口
     """
-    uvicorn.run(app, host=host, port=port)
+    logger.info("Starting EnlightenLM API Server...")
+    init_model()
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
+
+def main():
+    """命令行入口"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="EnlightenLM API Server")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="Host address")
+    parser.add_argument("--port", type=int, default=8000, help="Port number")
+    args = parser.parse_args()
+
+    run_server(host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
-    run_server()
+    main()

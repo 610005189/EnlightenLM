@@ -12,6 +12,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Status: API Mode](https://img.shields.io/badge/Status-API%20Mode-blue)]()
 [![DeepSeek Compatible](https://img.shields.io/badge/DeepSeek-V3%20%7C%20V4-Compatible-blue)]()
+[![CI](https://github.com/610005189/enlightenlm/actions/workflows/ci.yml/badge.svg)](https://github.com/610005189/enlightenlm/actions)
+[![PyPI version](https://img.shields.io/pypi/v/enlightenlm.svg)](https://pypi.org/project/enlightenlm/)
+[![Python versions](https://img.shields.io/pypi/pyversions/enlightenlm.svg)](https://pypi.org/project/enlightenlm/)
 
 ---
 

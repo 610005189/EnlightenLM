@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "enlightenlm"
+version = "2.3.0"
+description = "从'静态护栏'到'动态觉悟'——基于认知神经科学的大模型安全推理与元认知框架"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+keywords = ["llm", "security", "safety", "deepseek", "transformers"]
+authors = [
+    {name = "EnlightenLM Team"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "numpy>=1.20",
+    "loguru>=0.7.0",
+]
+
+[project.optional-dependencies]
+api = [
+    "fastapi>=0.100",
+    "uvicorn>=0.20",
+    "pydantic>=2.0",
+]
+local = [
+    "transformers>=4.30",
+    "torch>=2.0",
+]
+security = [
+    "pycryptodome>=3.19",
+    "cryptography>=41.0",
+]
+full = [
+    "enlightenlm[api,local,security]",
+]
+
+[project.scripts]
+enlightenlm-server = "enlighten.api_server:main"
+
+[project.urls]
+Homepage = "https://github.com/610005189/enlightenlm"
+Documentation = "https://github.com/610005189/enlightenlm/docs"
+Issues = "https://github.com/610005189/enlightenlm/issues"
+
+[tool.setuptools]
+packages = ["enlighten"]
+package-data = {"enlighten" = ["config/*"]}
+
+[tool.setuptools.package-dir]
+enlighten = "enlighten"
+
+[tool.black]
+line-length = 100
+target-version = ["py38", "py39", "py310", "py311"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
