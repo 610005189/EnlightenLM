@@ -23,6 +23,7 @@ class L1Output:
     attention_weights: torch.Tensor
     entropy_stats: Dict[str, float]
     van_event: bool
+    p_harm: float
     control_signals: Dict[str, Any]
 
 
@@ -54,6 +55,8 @@ class L1Generation(nn.Module):
         self.embed_dim = config.get("embed_dim", 1024)
         self.num_heads = config.get("num_heads", 12)
         self.task_bias_dim = config.get("task_bias_dim", 128)
+        self.van_level = config.get("van_level", "medium")
+        self.sensitive_keywords = config.get("sensitive_keywords", [])
 
         self.dan = DANAttention(
             embed_dim=self.embed_dim,
@@ -61,9 +64,12 @@ class L1Generation(nn.Module):
             task_bias_dim=self.task_bias_dim
         )
 
-        self.van = VANAttention(
+        from .attention.van import VANFunnel
+        self.van = VANFunnel(
+            level=self.van_level,
             embed_dim=self.embed_dim,
-            vocab_size=tokenizer.vocab_size if tokenizer else 50000
+            vocab_size=tokenizer.vocab_size if tokenizer else 50000,
+            sensitive_keywords=self.sensitive_keywords
         )
 
         self.fusion = AttentionFusion(
@@ -112,7 +118,13 @@ class L1Generation(nn.Module):
             hidden_states, hidden_states, hidden_states, task_bias
         )
 
-        van_output, van_event, van_mask = self.van(input_ids, hidden_states)
+        # 使用新的 VANFunnel 接口
+        van_result = self.van(input_ids, hidden_states)
+        van_event = van_result.van_event
+        p_harm = van_result.p_harm
+
+        # 简化的 VAN 输出（用于融合）
+        van_output = hidden_states * (1 - p_harm)  # 基于有害概率调整
 
         tau = control_signals.get("tau", 1.0)
         theta = control_signals.get("theta", 0.5)
@@ -141,6 +153,7 @@ class L1Generation(nn.Module):
             attention_weights=attention_weights,
             entropy_stats=entropy_stats,
             van_event=van_event,
+            p_harm=p_harm,
             control_signals=control_signals
         )
 

@@ -56,27 +56,39 @@ class EnlightenLM:
         self,
         model: Any,
         tokenizer: Any,
-        config: Optional[EnlightenConfig] = None
+        config: Optional[Union[EnlightenConfig, ModeConfig, str]] = None
     ):
         self.model = model
         self.tokenizer = tokenizer
-        self.config = config or EnlightenConfig()
+        
+        # 处理不同类型的配置输入
+        if isinstance(config, str):
+            # 从模式名称或配置文件路径加载
+            if config in ['full', 'balanced', 'lightweight']:
+                self.config = load_config(mode=config)
+            else:
+                self.config = load_config(config_path=config)
+        elif isinstance(config, ModeConfig):
+            self.config = config
+        else:
+            self.config = config or load_config(mode="balanced")
 
+        # 初始化组件
         self.l1 = L1Generation(model, tokenizer, self._get_l1_config())
 
         self.l2 = L2WorkingMemory(
-            memory_size=self.config.l2.memory_size,
-            embedding_dim=self.config.l2.embedding_dim,
+            memory_size=self._get_working_memory_capacity(),
+            embedding_dim=self._get_embedding_dim(),
             config=self._get_l2_config()
         )
 
         self.l3 = L3Controller(self._get_l3_config())
 
         self.audit_chain = AuditHashChain(
-            algorithm=self.config.audit.hash_algorithm
+            algorithm=self._get_audit_algorithm()
         )
 
-        self.hmac_signer = HMACSigner() if self.config.audit.hmac_enabled else None
+        self.hmac_signer = HMACSigner() if self._is_hmac_enabled() else None
 
         self.offline_review = OfflineReviewService(
             audit_chain=self.audit_chain,
@@ -85,34 +97,99 @@ class EnlightenLM:
 
         self.step_count = 0
 
-        logger.info("EnlightenLM initialized successfully")
+        logger.info(f"EnlightenLM initialized successfully in {self.get_mode()} mode")
 
     def _get_l1_config(self) -> Dict:
-        return {
-            "embed_dim": self.config.l1.embed_dim,
-            "num_heads": self.config.l1.num_heads,
-            "task_bias_dim": self.config.l1.task_bias_dim,
-            "memory_size": self.config.l2.memory_size
-        }
+        """获取 L1 配置，兼容不同配置结构"""
+        if hasattr(self.config, 'l1'):
+            # 旧结构
+            return {
+                "embed_dim": self.config.l1.embed_dim,
+                "num_heads": self.config.l1.num_heads,
+                "task_bias_dim": self.config.l1.task_bias_dim,
+                "memory_size": self._get_working_memory_capacity()
+            }
+        else:
+            # 新模式结构
+            return {
+                "embed_dim": 1024,  # 默认值
+                "num_heads": 12,     # 默认值
+                "task_bias_dim": 128, # 默认值
+                "memory_size": self._get_working_memory_capacity()
+            }
 
     def _get_l2_config(self) -> Dict:
-        return {
-            "memory_size": self.config.l2.memory_size,
-            "update_strategy": self.config.l2.update_strategy,
-            "entropy_window": self.config.l2.entropy_window,
-            "eviction_policy": self.config.l2.eviction_policy
-        }
+        """获取 L2 配置，兼容不同配置结构"""
+        if hasattr(self.config, 'l2'):
+            # 旧结构
+            return {
+                "memory_size": self.config.l2.memory_size,
+                "update_strategy": self.config.l2.update_strategy,
+                "entropy_window": self.config.l2.entropy_window,
+                "eviction_policy": self.config.l2.eviction_policy
+            }
+        else:
+            # 新模式结构
+            working_memory = getattr(self.config, 'working_memory', {})
+            entropy_monitor = getattr(self.config, 'entropy_monitor', {})
+            return {
+                "memory_size": working_memory.get('capacity', 512),
+                "update_strategy": "topk" if working_memory.get('use_topk_refresh', True) else "sliding",
+                "entropy_window": entropy_monitor.get('window_size', 20),
+                "eviction_policy": working_memory.get('eviction_policy', 'lru')
+            }
 
     def _get_l3_config(self) -> Dict:
-        return {
-            "entropy_threshold": self.config.l3.entropy_threshold,
-            "variance_threshold": self.config.l3.variance_threshold,
-            "tau_range": self.config.l3.tau_range,
-            "theta_range": self.config.l3.theta_range,
-            "alpha_range": self.config.l3.alpha_range,
-            "van_priority": self.config.l3.van_priority,
-            "cutoff_cooldown": self.config.l3.cutoff_cooldown
-        }
+        """获取 L3 配置，兼容不同配置结构"""
+        if hasattr(self.config, 'l3'):
+            # 旧结构
+            return {
+                "entropy_threshold": self.config.l3.entropy_threshold,
+                "variance_threshold": self.config.l3.variance_threshold,
+                "tau_range": self.config.l3.tau_range,
+                "theta_range": self.config.l3.theta_range,
+                "alpha_range": self.config.l3.alpha_range,
+                "van_priority": self.config.l3.van_priority,
+                "cutoff_cooldown": self.config.l3.cutoff_cooldown
+            }
+        else:
+            # 新模式结构
+            cutoff = getattr(self.config, 'cutoff', {})
+            return {
+                "entropy_threshold": cutoff.get('low_entropy_threshold', 0.5),
+                "variance_threshold": cutoff.get('low_variance_threshold', 0.05),
+                "tau_range": [0.1, 2.0],  # 默认值
+                "theta_range": [0.5, 0.9],  # 默认值
+                "alpha_range": [0.0, 1.0],  # 默认值
+                "van_priority": True,       # 默认值
+                "cutoff_cooldown": cutoff.get('cooldown_steps', 10)
+            }
+
+    def _get_working_memory_capacity(self) -> int:
+        """获取工作记忆容量"""
+        if hasattr(self.config, 'l2'):
+            return self.config.l2.memory_size
+        working_memory = getattr(self.config, 'working_memory', {})
+        return working_memory.get('capacity', 512)
+
+    def _get_embedding_dim(self) -> int:
+        """获取嵌入维度"""
+        if hasattr(self.config, 'l1'):
+            return self.config.l1.embed_dim
+        working_memory = getattr(self.config, 'working_memory', {})
+        return working_memory.get('embedding_dim', 1024)
+
+    def _get_audit_algorithm(self) -> str:
+        """获取审计算法"""
+        if hasattr(self.config, 'audit'):
+            return self.config.audit.hash_algorithm
+        return "sha256"  # 默认值
+
+    def _is_hmac_enabled(self) -> bool:
+        """检查是否启用 HMAC"""
+        if hasattr(self.config, 'audit'):
+            return self.config.audit.hmac_enabled
+        return True  # 默认启用
 
     def generate(
         self,
@@ -137,11 +214,14 @@ class EnlightenLM:
         session_id = session_id or str(uuid.uuid4())
 
         with Timer() as timer:
-            l3_signals = self._l3_step()
-
+            # 首先执行 L2 步骤获取工作记忆
             l2_output = self._l2_step(text)
-
-            l1_output = self._l1_step(text, l3_signals)
+            
+            # 然后执行 L1 步骤生成输出
+            l1_output = self._l1_step(text)
+            
+            # 最后执行 L3 步骤进行元控制，使用 L1 的输出
+            l3_signals = self._l3_step(l1_output)
 
             self._log_audit(session_id, text, l1_output, l2_output, l3_signals)
 
@@ -162,13 +242,16 @@ class EnlightenLM:
 
         return result
 
-    def _l3_step(self) -> ControlSignals:
+    def _l3_step(self, l1_output: Optional[Any] = None) -> ControlSignals:
         """
         L3元控制步骤
         """
         entropy_stats = self.l2.get_entropy_stats().to_dict()
 
-        control_signals = self.l3(entropy_stats)
+        van_event = getattr(l1_output, 'van_event', False)
+        p_harm = getattr(l1_output, 'p_harm', 0.0)
+
+        control_signals = self.l3(entropy_stats, van_event=van_event, p_harm=p_harm)
 
         return control_signals
 
@@ -192,8 +275,7 @@ class EnlightenLM:
 
     def _l1_step(
         self,
-        text: str,
-        control_signals: ControlSignals
+        text: str
     ) -> L1Output:
         """
         L1生成步骤
@@ -201,14 +283,15 @@ class EnlightenLM:
         inputs = self.tokenizer(text, return_tensors="pt")
         input_ids = inputs["input_ids"]
 
+        # 传递默认控制信号
         l1_output = self.l1(
             input_ids,
             control_signals={
-                "tau": control_signals.tau,
-                "theta": control_signals.theta,
-                "alpha": control_signals.alpha,
-                "stability": control_signals.stability,
-                "cutoff": control_signals.cutoff
+                "tau": 0.7,
+                "theta": 0.7,
+                "alpha": 0.1,
+                "stability": True,
+                "cutoff": False
             }
         )
 
@@ -230,6 +313,8 @@ class EnlightenLM:
             "input_text": input_text,
             "output_text": self._decode(l1_output.output_ids),
             "entropy_stats": l2_output.entropy_stats,
+            "van_event": l1_output.van_event,
+            "p_harm": getattr(l1_output, 'p_harm', 0.0),
             "cutoff": control_signals.cutoff,
             "cutoff_reason": control_signals.reason,
             "tau": control_signals.tau,
@@ -338,7 +423,8 @@ class EnlightenLM:
         return {
             "mode": self.get_mode(),
             "step_count": self.step_count,
-            "l2_memory_size": self.config.l2.memory_size if hasattr(self.config, 'l2') else None,
-            "l3_cooldown": self.l3.cooldown_counter,
-            "l3_stats": self.l3.get_statistics() if hasattr(self.l3, 'get_statistics') else {}
+            "l2_memory_size": self._get_working_memory_capacity(),
+            "l3_cooldown": getattr(self.l3, 'cooldown_counter', 0),
+            "l3_stats": self.l3.get_statistics() if hasattr(self.l3, 'get_statistics') else {},
+            "config_type": "mode" if not hasattr(self.config, 'l1') else "legacy"
         }

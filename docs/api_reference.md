@@ -1,6 +1,6 @@
 # EnlightenLM API 参考文档
 
-> 版本: v1.0
+> 版本: v2.1
 > 更新日期: 2026-04-23
 
 ---
@@ -54,6 +54,49 @@ def generate(
     max_length: int = 2048
 ) -> InferenceResult
 ```
+
+##### `set_mode()`
+
+运行时切换模式。
+
+```python
+def set_mode(
+    self,
+    mode: str
+) -> None
+```
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| mode | str | 目标模式 ("full" \| "balanced" \| "lightweight") |
+
+**示例**:
+```python
+# 切换到 lightweight 模式以获得更低延迟
+model.set_mode("lightweight")
+```
+
+##### `get_mode()`
+
+获取当前运行模式。
+
+```python
+def get_mode(self) -> str
+```
+
+**返回**: 当前模式名称
+
+##### `get_status()`
+
+获取系统状态。
+
+```python
+def get_status(self) -> Dict[str, Any]
+```
+
+**返回**: 包含模式、步骤计数等状态信息的字典
+
+##### `generate()` 参数说明
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|

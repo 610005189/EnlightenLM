@@ -329,10 +329,12 @@ L2-L3：VAN 敏感 token (16K)     → 永不淘汰
 - ✅ HuggingFace + Qwen2.5-7B 原型
 - ✅ L1 稀疏注意力、L2 简化工作记忆、L3 规则控制器
 
-### Phase 2：配置开关与模式（当前阶段）
-- 实现三级配置模式（full/balanced/lightweight）
-- 集成轻量 VAN MLP 分类器
-- 基础审计日志与哈希链
+### Phase 2：配置开关与模式（已完成）
+- ✅ 实现三级配置模式（full/balanced/lightweight）
+- ✅ 集成轻量 VAN MLP 分类器（三级漏斗机制）
+- ✅ 完善审计日志与哈希链（不可篡改、HMAC 签名）
+- ✅ 运行时模式热切换
+- ✅ 环境变量配置覆盖
 
 ### Phase 3：生产级优化（3-6 个月）
 - 移植到 vLLM 后端

@@ -32,6 +32,7 @@ class DecisionRecord:
     entropy_mean: float
     entropy_variance: float
     van_event: bool
+    p_harm: float
     cutoff: bool
     cooldown_remaining: int
     reason: Optional[str]
@@ -92,6 +93,7 @@ class L3Controller(nn.Module):
         self,
         entropy_stats: Dict[str, float],
         van_event: bool = False,
+        p_harm: float = 0.0,
         task_embedding: Optional[torch.Tensor] = None
     ) -> ControlSignals:
         """
@@ -104,6 +106,7 @@ class L3Controller(nn.Module):
                 - trend: k_H 趋势
                 - current: 当前熵值
             van_event: 是否触发VAN事件
+            p_harm: VAN检测的有害概率
             task_embedding: 任务嵌入向量
 
         Returns:
@@ -121,7 +124,7 @@ class L3Controller(nn.Module):
 
         if self.cooldown_counter > 0:
             self.cooldown_counter -= 1
-            self._record_decision(mu_h, sigma_h, van_event, False, "Cooldown")
+            self._record_decision(mu_h, sigma_h, van_event, p_harm, False, "Cooldown")
             return ControlSignals(
                 tau=0.7,
                 theta=0.7,
@@ -134,20 +137,20 @@ class L3Controller(nn.Module):
         if self.van_priority and van_event:
             cutoff_signals = self._van_cutoff_response()
             self.cutoff_history[-1] = True
-            self._record_decision(mu_h, sigma_h, van_event, True, cutoff_signals.reason)
+            self._record_decision(mu_h, sigma_h, van_event, p_harm, True, cutoff_signals.reason)
             return cutoff_signals
 
         if self._should_cutoff(mu_h, sigma_h, k_h):
             if self._detect_flickering():
-                self._record_decision(mu_h, sigma_h, van_event, False, "Flicker suppressed")
+                self._record_decision(mu_h, sigma_h, van_event, p_harm, False, "Flicker suppressed")
                 return self._flicker_suppression_response()
 
             cutoff_signals = self._cutoff_response(mu_h)
             self.cutoff_history[-1] = True
-            self._record_decision(mu_h, sigma_h, van_event, True, cutoff_signals.reason)
+            self._record_decision(mu_h, sigma_h, van_event, p_harm, True, cutoff_signals.reason)
             return cutoff_signals
 
-        self._record_decision(mu_h, sigma_h, van_event, False, None)
+        self._record_decision(mu_h, sigma_h, van_event, p_harm, False, None)
         return self._normal_control(task_embedding)
 
     def _detect_flickering(self) -> bool:
@@ -187,6 +190,7 @@ class L3Controller(nn.Module):
         entropy_mean: float,
         entropy_variance: float,
         van_event: bool,
+        p_harm: float,
         cutoff: bool,
         reason: Optional[str]
     ) -> None:
@@ -205,6 +209,7 @@ class L3Controller(nn.Module):
             entropy_mean=entropy_mean,
             entropy_variance=entropy_variance,
             van_event=van_event,
+            p_harm=p_harm,
             cutoff=cutoff,
             cooldown_remaining=self.cooldown_counter,
             reason=reason

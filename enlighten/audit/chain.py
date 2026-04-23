@@ -74,6 +74,12 @@ class AuditHashChain:
         Returns:
             link_hash: 新条目的链接哈希
         """
+        # 添加前一个哈希到数据中，增强完整性
+        if self.chain:
+            data["_prev_hash"] = self.chain[-1].hash
+        else:
+            data["_prev_hash"] = self.initial_hash
+
         current_hash = self._hash_data(data)
 
         if self.chain:

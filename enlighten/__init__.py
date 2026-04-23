@@ -13,12 +13,14 @@ __version__ = "2.1.0"
 from .l1_generation import L1Generation
 from .l2_working_memory import L2WorkingMemory
 from .l3_controller import L3Controller
+from .main import EnlightenLM
 from .config import EnlightenMode, ModeConfig, load_config, ConfigManager
 
 __all__ = [
     "L1Generation",
     "L2WorkingMemory",
     "L3Controller",
+    "EnlightenLM",
     "EnlightenMode",
     "ModeConfig",
     "load_config",

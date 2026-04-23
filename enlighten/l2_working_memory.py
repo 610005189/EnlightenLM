@@ -191,12 +191,17 @@ class SimplifiedL2(nn.Module):
         if attention_weights is not None:
             self.entropy_tracker.update(attention_weights)
 
-        importance = torch.norm(hidden_states, dim=-1).mean(dim=1)
+        # 计算每个 token 的重要性，对 batch 维度取平均 (seq_len,)
+        importance = torch.norm(hidden_states, dim=-1).mean(dim=0)
 
-        topk_indices = torch.topk(importance, k=min(self.memory_size, hidden_states.size(1))).indices
+        # 确保 k 不超过重要性张量的长度
+        k = min(self.memory_size, importance.size(0))
+        if k > 0:
+            topk_indices = torch.topk(importance, k=k).indices
 
-        for i, idx in enumerate(topk_indices[:self.memory_size]):
-            self.memory.data[i] = hidden_states[0, idx].detach()
+            for i, idx in enumerate(topk_indices):
+                # 对 batch 维度取平均
+                self.memory.data[i] = hidden_states[:, idx, :].mean(dim=0).detach()
 
         entropy_stats = self.entropy_tracker.get_statistics()
 
