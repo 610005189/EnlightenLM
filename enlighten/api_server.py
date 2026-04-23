@@ -154,7 +154,6 @@ def init_model():
 
 def get_model() -> HybridEnlightenLM:
     """获取模型实例"""
-    global _model
     if _model is None:
         raise HTTPException(status_code=503, detail="Model not initialized")
     return _model
@@ -169,8 +168,6 @@ async def startup_event():
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """健康检查"""
-    global _model
-
     try:
         if _model is None:
             return HealthResponse(
@@ -280,7 +277,7 @@ async def switch_mode(request: ModeSwitchRequest):
 
     在本地模型模式和API模式之间切换
     """
-    global _model, _deepseek_client
+    global _model
 
     try:
         use_local = request.use_local_model
@@ -333,8 +330,6 @@ async def switch_mode(request: ModeSwitchRequest):
 @app.get("/status")
 async def get_status():
     """获取系统状态"""
-    global _model
-
     if _model is None:
         return {"status": "not_initialized"}
 
@@ -344,8 +339,6 @@ async def get_status():
 @app.get("/security/stats")
 async def get_security_stats() -> Dict[str, Any]:
     """获取安全统计信息"""
-    global _model
-
     if _model is None:
         return {"error": "Model not initialized"}
 
@@ -372,8 +365,6 @@ async def get_security_stats() -> Dict[str, Any]:
 @app.post("/security/reset")
 async def reset_security():
     """重置安全监控状态"""
-    global _model
-
     if _model is None:
         return {"error": "Model not initialized"}
 
@@ -384,8 +375,6 @@ async def reset_security():
 @app.get("/audit/verify")
 async def verify_audit_chain():
     """验证审计链"""
-    global _model
-
     if _model is None:
         return {"verified": False, "message": "Model not initialized"}
 
@@ -400,8 +389,6 @@ async def verify_audit_chain():
 @app.get("/")
 async def root():
     """根路径"""
-    global _model
-
     mode = "unknown"
     if _model is not None:
         mode = "local" if _model.use_local_model else "api"

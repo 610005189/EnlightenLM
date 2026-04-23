@@ -5,7 +5,7 @@ EnlightenLM Main Entry - 主入口
 
 import torch
 import logging
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Union
 from dataclasses import dataclass
 
 from .l1_generation import L1Generation, L1Output
@@ -50,7 +50,7 @@ class EnlightenLM:
         self,
         model: Any,
         tokenizer: Any,
-        config: Optional[Union[EnlightenConfig, ModeConfig, str]] = None
+        config: Optional[Union[ModeConfig, str]] = None
     ):
         self.model = model
         self.tokenizer = tokenizer
