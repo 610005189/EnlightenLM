@@ -408,42 +408,125 @@ L2-L3：VAN 敏感 token (16K)     → 永不淘汰
 
 ```
 .
-├── README.md
-├── LICENSE
-├── requirements.txt
-├── configs/                      # ⚠️ 骨架代码配置
-│   ├── full.yaml
-│   ├── balanced.yaml
-│   ├── lightweight.yaml
-│   └── custom.yaml.example
-├── enlighten/
+├── README.md                          # 本文件
+├── LICENSE                            # MIT许可证
+├── requirements.txt                   # Python依赖
+├── CHANGELOG.md                       # 变更日志
+├── CONTRIBUTING.md                    # 贡献指南
+├── deployment_guide.md                # 部署指南
+├── usage_examples.md                  # 使用示例
+├── IMPLEMENTATION_PLAN_v2.1.md       # 实施计划
+│
+├── configs/                          # ✅ 配置文件
+│   ├── full.yaml                     # 完整模式配置
+│   ├── balanced.yaml                  # 平衡模式配置
+│   ├── lightweight.yaml               # 轻量模式配置
+│   ├── core_rules.yaml               # 核心规则
+│   ├── deepseek_v3.yaml              # DeepSeek V3配置
+│   ├── hyperparameters.yaml          # 超参数配置
+│   └── task_embeddings.yaml           # 任务嵌入配置
+│
+├── enlighten/                        # 核心代码
 │   ├── __init__.py
-│   ├── hybrid_architecture.py   # ✅ 实际运行的简化架构
-│   ├── api_server.py            # ✅ 实际运行的API服务
-│   ├── api/
-│   │   └── deepseek_client.py   # ✅ 实际使用的API客户端
-│   ├── config/
-│   │   └── modes.py             # ✅ 实际使用的配置
-│   ├── l1_generation.py         # ⚠️ 骨架代码（未集成）
-│   ├── l2_working_memory.py     # ⚠️ 骨架代码（未集成）
-│   ├── l3_controller.py         # ⚠️ 骨架代码（未集成）
-│   ├── audit/                   # ⚠️ 骨架代码（未集成）
-│   ├── attention/               # ⚠️ 骨架代码（未集成）
-│   ├── memory/                  # ⚠️ 骨架代码（未集成）
-│   └── cutoff/                  # ⚠️ 骨架代码（未集成）
-├── docs/
-│   ├── architecture.md          # ⚠️ 设计架构文档
-│   ├── math_verification.md     # ⚠️ 数学验证（标注实现状态）
-│   ├── math_verification_audit.md # ✅ 实现状态审计报告
-│   ├── implementation_status.md # ✅ 实现状态总览
-│   └── ...
-├── tests/
-│   └── test_hybrid_architecture.py  # ✅ 68个测试通过
-└── docs/chat.html               # ✅ Web聊天界面
+│   ├── main.py                       # 主入口
+│   ├── utils.py                      # 工具函数
+│   ├── hybrid_architecture.py        # ✅ 实际运行: L1/L2/L3架构
+│   ├── api_server.py                # ✅ 实际运行: API服务
+│   ├── async_review.py              # 异步审核
+│   │
+│   ├── api/                         # ✅ API客户端
+│   │   ├── __init__.py
+│   │   ├── deepseek_client.py       # DeepSeek API
+│   │   └── dashscope_client.py      # 阿里云API
+│   │
+│   ├── config/                      # ✅ 配置管理
+│   │   ├── __init__.py
+│   │   ├── modes.py                 # 模式配置类
+│   │   └── loader.py                # 配置加载器
+│   │
+│   ├── adapters/                    # ⚠️ 模型适配器(骨架)
+│   │   ├── __init__.py
+│   │   ├── base.py
+│   │   ├── deepseek_adapter.py
+│   │   └── vllm_adapter.py
+│   │
+│   ├── attention/                   # ⚠️ 注意力机制(骨架)
+│   │   ├── __init__.py
+│   │   ├── dan.py                   # DAN流
+│   │   ├── van.py                   # VAN流
+│   │   ├── fusion.py                # 融合门控
+│   │   ├── sparse.py                # 稀疏注意力
+│   │   └── multimodal_van.py        # 多模态VAN
+│   │
+│   ├── memory/                      # ⚠️ 记忆管理(骨架)
+│   │   ├── __init__.py
+│   │   ├── working_memory.py
+│   │   ├── engram_optimizer.py      # Engram优化器
+│   │   └── entropy_tracker.py       # 熵追踪器
+│   │
+│   ├── audit/                       # ⚠️ 审计系统(骨架)
+│   │   ├── __init__.py
+│   │   ├── chain.py                 # 哈希链
+│   │   ├── hmac_signature.py        # HMAC签名
+│   │   ├── tee_audit.py             # TEE审计
+│   │   ├── offline_review.py        # 离线复盘
+│   │   └── review_service.py        # 复盘服务
+│   │
+│   ├── cutoff/                      # ⚠️ 截断机制(骨架)
+│   │   ├── __init__.py
+│   │   ├── cutoff_entropy.py        # 熵截断
+│   │   ├── dmn.py                   # DMN抑制
+│   │   └── forget_gate.py           # 遗忘门
+│   │
+│   ├── l1_generation.py             # ⚠️ L1生成层(骨架)
+│   ├── l2_working_memory.py         # ⚠️ L2工作记忆(骨架)
+│   └── l3_controller.py             # ⚠️ L3控制器(骨架)
+│
+├── docs/                            # 文档
+│   ├── chat.html                    # ✅ Web聊天界面
+│   ├── architecture.md              # ⚠️ 架构设计文档
+│   ├── math_verification.md         # ⚠️ 数学验证文档
+│   ├── math_verification_audit.md   # ✅ 实现状态审计
+│   ├── product_report.md            # 产品报告
+│   ├── user_manual.md               # 用户手册
+│   ├── api_reference.md             # API参考
+│   ├── integration_guide.md          # 集成指南
+│   ├── 设计文档.md                   # 设计文档
+│   ├── article/                     # 文章
+│   └── paper/                       # 论文
+│
+├── tests/                           # 测试
+│   ├── test_hybrid_architecture.py # ✅ 68个测试通过
+│   ├── demo_comparison.py           # ✅ 对比演示
+│   ├── test_security.py            # 安全测试
+│   ├── test_jailbreak.py           # 越狱测试
+│   ├── test_deepseek_adapter.py    # 适配器测试
+│   ├── test_entropy_cutoff.py      # 熵截断测试
+│   ├── test_engram_optimizer.py    # 记忆优化器测试
+│   ├── test_multimodal_van.py      # 多模态VAN测试
+│   ├── test_phase1_validation.py   # Phase1验证
+│   ├── test_phase2_integration.py  # Phase2集成
+│   ├── test_phase4_integration.py  # Phase4集成
+│   ├── test_attention_bias.py      # 注意力偏差测试
+│   ├── test_security_performance.py # 安全性能测试
+│   ├── test_simple.py              # 简单测试
+│   ├── test_system.py              # 系统测试
+│   ├── jailbreak_test_report.md    # 越狱测试报告
+│   └── benchmark/                  # 性能基准
+│       └── test_performance.py
+│
+├── EnlightenLM_Quick_Test/          # 快速测试
+│   ├── EnlightenLM_Quick_Test_1.md
+│   └── Experiment_Results.md
+│
+└── logs/                            # 日志
+    ├── security_test_results.json  # 安全测试结果
+    └── audit/                      # 审计日志
+        └── last_hash.txt           # 上次哈希
 ```
 
 **图例**：
-- ✅ = 实际运行使用的代码
+- ✅ = 实际运行使用的代码/文档
 - ⚠️ = 设计/骨架代码（未在实际运行中集成）
 
 ---
