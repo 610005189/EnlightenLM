@@ -87,7 +87,7 @@ print(result.meta_description)
 
 ```bash
 # 启动API服务
-python -m enlighten.api --host 0.0.0.0 --port 8000
+python -m enlighten.api_server --host 0.0.0.0 --port 8000
 
 # 调用API
 curl -X POST http://localhost:8000/inference \
@@ -335,7 +335,7 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["python", "-m", "enlighten.api", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "enlighten.api_server", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
 ```bash
