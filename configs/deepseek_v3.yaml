@@ -1,0 +1,51 @@
+# DeepSeek-V3 模式配置
+# 使用 DeepSeek-V3 作为基础模型
+
+mode: deepseek_v3
+
+# 模型配置
+model:
+  provider: deepseek
+  name: deepseek-ai/DeepSeek-V3
+  api_key_env: DEEPSEEK_API_KEY
+
+# L1 配置
+l1:
+  embed_dim: 5120  # DeepSeek-V3 的隐藏层维度
+  num_heads: 40    # DeepSeek-V3 的注意力头数
+  task_bias_dim: 256
+  memory_size: 512
+
+# L2 配置
+l2:
+  memory_size: 512
+  update_strategy: topk
+  entropy_window: 20
+  eviction_policy: lru
+
+# L3 配置
+l3:
+  entropy_threshold: 0.5
+  variance_threshold: 0.05
+  tau_range: [0.1, 2.0]
+  theta_range: [0.5, 0.9]
+  alpha_range: [0.0, 1.0]
+  van_priority: true
+  cutoff_cooldown: 10
+
+# VAN 配置
+van:
+  level: full  # full 模式获得最佳效果
+  embed_dim: 5120
+  sensitive_keywords:
+    - 炸药
+    - 毒品
+    - 武器
+    - 攻击
+
+# 审计配置
+audit:
+  enabled: true
+  hash_algorithm: sha256
+  hmac_enabled: true
+  tee_type: sgx
