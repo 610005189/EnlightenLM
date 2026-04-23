@@ -6,6 +6,7 @@ Automated Review Scheduler - 自动化复盘服务调度器
 import time
 import threading
 import schedule
+import json
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime, timedelta
@@ -252,10 +253,20 @@ class AutomatedReviewScheduler:
         if len(self.snapshots) > self.config.max_snapshots:
             self.snapshots = self.snapshots[-self.config.max_snapshots:]
 
-    def _estimate_size(self, data: Dict) -> int:
-        """估算数据大小"""
+    def _estimate_size(self, data: Dict[str, Any]) -> int:
+        """估算数据大小
+
+        Args:
+            data: 数据字典
+
+        Returns:
+            大小（字节）
+        """
         import sys
-        return len(str(data).encode())
+        try:
+            return sys.getsizeof(json.dumps(data, default=str))
+        except (TypeError, ValueError):
+            return len(str(data).encode())
 
     def get_pending_tasks(self) -> List[ReviewTask]:
         """获取待处理任务"""
