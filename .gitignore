@@ -40,6 +40,7 @@ logs/
 .coverage
 htmlcov/
 coverage.xml
+EnlightenLM_Quick_Test/
 
 # Environment variables
 .env
