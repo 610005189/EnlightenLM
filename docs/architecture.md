@@ -1,7 +1,7 @@
 # EnlightenLM 架构设计文档
 
-> 版本: v1.0
-> 更新日期: 2026-04-23
+> 版本: v2.2（Phase 4 完成，支持多模态 VAN）
+> 更新日期: 2026-01-15
 
 ---
 
@@ -14,8 +14,9 @@
 5. [数据流与控制流](#5-数据流与控制流)
 6. [安全机制](#6-安全机制)
 7. [审计系统](#7-审计系统)
-8. [配置管理](#8-配置管理)
-9. [扩展性设计](#9-扩展性设计)
+8. [配置管理与模式](#8-配置管理与模式)
+9. [DeepSeek-V4 兼容](#9-deepseek-v4-兼容)
+10. [扩展性设计](#10-扩展性设计)
 
 ---
 
@@ -23,7 +24,7 @@
 
 ### 1.1 项目简介
 
-EnlightenLM（觉悟三层架构）是一个基于认知神经科学的大模型安全推理与元认知框架。它将大模型推理过程解耦为三层网络结构，实现高效、可审计、可截断的安全推理。
+EnlightenLM（觉悟三层架构）是一个基于认知神经科学的大模型安全推理与元认知框架。它将大模型推理过程解耦为三层网络结构（ L1 生成层、L2 工作记忆层、L3 元控制层），实现高效、可审计、可截断的安全推理。
 
 ### 1.2 设计目标
 
@@ -34,765 +35,336 @@ EnlightenLM（觉悟三层架构）是一个基于认知神经科学的大模型
 | **可审计性** | 通过密码学方法确保审计日志不可篡改 |
 | **安全性** | 通过多层防御机制，包括截断、隔离和威胁检测 |
 | **高效性** | 通过稀疏注意力降低长上下文计算复杂度 |
+| **多模态** | 支持文本、图像、音频等多种输入模式 |
 
 ### 1.3 技术指标
 
 | 指标 | 值 |
 |------|-----|
-| 支持模型规模 | 7B - 70B 参数 |
-| 最大上下文长度 | 128K tokens |
+| 支持模型规模 | 7B - 1T 参数 |
+| 最大上下文长度 | 128K（V3）→ 1M（V4） tokens |
 | 截断响应时间 | < 10ms |
 | 审计日志存储效率 | 压缩率 70% |
+| 额外推理开销 | +5% ~ +15%（可配置） |
 
 ---
 
 ## 2. 设计动机
 
-### 2.1 传统大模型的三大结构性困境
+### 2.1 传统大模型安全方案的局限性
 
-#### 2.1.1 注意力不可控
+- **静态护栏**：无法动态适应上下文演变
+- **后置检测**：在生成后才进行安全检查，浪费算力
+- **黑盒审计**：缺乏可解释性和可追溯性
 
-**问题描述**: 标准Transformer的注意力机制是完全数据驱动的，模型可能忽略关键指令或被恶意提示词劫持。
+### 2.2 EnlightenLM 的解决思路
 
-**传统应对**: 提示词软引导、system prompt设定。
+借鉴人脑的注意力网络机制（DAN/VAN/DMN），实现实时自我监控与安全截断：
 
-**EnlightenLM的解法**: 双流注意力 + 元控制器
-- 目标驱动流（DAN）: 根据任务类型强制引导注意力
-- 刺激驱动流（VAN）: 检测异常模式并触发中断
-
-#### 2.1.2 自指递归与幻觉
-
-**问题描述**: 模型在生成长文本时可能陷入自我参照循环，导致输出重复、逻辑混乱。
-
-**传统应对**: 依赖训练数据分布的规律，无机制约束。
-
-**EnlightenLM的解法**: DMN抑制 + 遗忘门
-- 主动衰减内部噪声与KV缓存
-- 检测自反循环并实时截断
-
-#### 2.1.3 安全审计缺失
-
-**问题描述**: 现有LLM的决策过程是不可追溯的，日志可篡改，无法进行事后审查。
-
-**传统应对**: 简单的API日志记录。
-
-**EnlightenLM的解法**: 密码学审计链 + 离线复盘
-- 每一步注意力状态、调控动作均被签名存证
-- 事后可生成可读报告
-
-### 2.2 认知神经科学理论基础
-
-EnlightenLM的设计灵感来自人脑的三个注意力网络：
-
-| 网络 | 功能 | EnlightenLM对应 |
-|------|------|----------------|
-| **DAN** (Default Mode Network) | 目标驱动的主动聚焦 | 任务偏置流 |
-| **VAN** (Ventral Attention Network) | 刺激驱动的自动重定向 | 显著性检测 |
-| **DMN** (Default Mode Network) | 自发、自我参照的思维流 | DMN抑制 + 遗忘门 |
+- **L1 生成层**：双流注意力（DAN 目标驱动 + VAN 刺激驱动）+ 遗忘门
+- **L2 工作记忆层**：压缩上下文，维护活跃 token 集、实时熵统计
+- **L3 元控制层**：实时调控温度/稀疏度/截断，写入密码学审计链
 
 ---
 
 ## 3. 系统架构
 
-### 3.1 整体架构图
+### 3.1 三层架构总览
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              用户输入                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  L3 元注意力控制器（前额叶模拟）                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ 输入:                                                                 │   │
-│  │   - L2的熵统计 (μ_H, σ_H², k_H)                                      │   │
-│  │   - VAN事件标志                                                       │   │
-│  │   - 任务嵌入                                                          │   │
-│  │                                                                       │   │
-│  │ 输出:                                                                 │   │
-│  │   - 温度 τ ∈ [0.1, 2.0]                                              │   │
-│  │   - 稀疏阈值 θ ∈ [0.5, 0.9]                                          │   │
-│  │   - DMN系数 α ∈ [0.0, 1.0]                                           │   │
-│  │   - 稳定性标志 s ∈ {0, 1}                                            │   │
-│  │   - 截断信号 cutoff ∈ {0, 1}                                         │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                              │                                             │
-│                              │ 调控信号 (τ, θ, α, s, cutoff)                │
-└──────────────────────────────┼─────────────────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  L2 工作记忆层（背侧/腹侧注意网络的中介）                                      │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ 数据结构:                                                             │   │
-│  │   - 记忆矩阵 M ∈ ℝ^(m×d), m=512, d=1024                             │   │
-│  │   - 活跃索引集 A, |A| = m                                            │   │
-│  │                                                                       │   │
-│  │ 功能:                                                                 │   │
-│  │   - 上下文压缩: n个token → m个活跃token                               │   │
-│  │   - 熵统计计算: 均值μ_H, 方差σ_H², 趋势k_H                           │   │
-│  │   - 稀疏键值提供: (K̃, Ṽ) 给L1                                       │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                              │                                             │
-│                              │ 快照 + 熵统计 + 稀疏KV                       │
-└──────────────────────────────┼─────────────────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  L1 生成层（双流注意力 + DMN抑制 + 遗忘门）                                  │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ DAN流 (目标驱动):                                                    │   │
-│  │   - 输入: 任务偏置 B_DAN + Q, K, V                                  │   │
-│  │   - 注意力: softmax(QK^T/√d + B_DAN)V                              │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ VAN流 (刺激驱动):                                                    │   │
-│  │   - 输入: 显著性检测结果 + 中断掩码 M_VAN                            │   │
-│  │   - 功能: 异常模式识别、敏感词检测                                   │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                              │                                             │
-│                              │ 门控融合 g                                   │
-│                              ▼                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ 融合与输出:                                                           │   │
-│  │   Attn_fused = g·Attn_DAN + (1-g)·Attn_VAN                         │   │
-│  │   Output = renormalize(softmax(Attn_fused/τ)·1_{>θ})V               │   │
-│  │          + α·ξ (DMN抑制)                                            │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                              │                                             │
-│                              │ token序列 + 注意力权重                       │
-└──────────────────────────────┼─────────────────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  审计日志系统（实时写入） + 离线复盘服务（异步）                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ 实时审计:                                                             │   │
-│  │   - 哈希链: H_i = SHA256(H_{i-1} || data_i)                         │   │
-│  │   - HMAC签名: 确保数据完整性                                          │   │
-│  │   - 紧凑二进制格式存储                                               │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ 离线复盘:                                                             │   │
-│  │   - 读取历史日志                                                      │   │
-│  │   - 分析截断事件                                                      │   │
-│  │   - 生成自然语言报告                                                  │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────┘
+用户输入
+│
+▼
+┌─────────────────────────────────────────────────────────────┐
+│  L3 元控制器（前额叶模拟）                                    │
+│  · 接收 L2 熵统计 (μ_H, σ_H) + 轻量 VAN 分数 p_harm          │
+│  · 输出：温度 τ, 稀疏阈值 θ, 稳定性标志 s, 截断标志 cutoff     │
+│  · 截断判据：低熵+低方差+VAN事件 → 硬中断                     │
+│  · 所有动作写入审计哈希链                                     │
+└─────────────────────────────┬───────────────────────────────┘
+│
+▼
+┌─────────────────────────────────────────────────────────────┐
+│  L2 工作记忆层（可配置）                                      │
+│  · 固定大小记忆矩阵 M (m×d)，m=256~512                       │
+│  · 活跃索引集 A = 最近窗口 + VAN标记敏感token                 │
+│  · 可选：定期刷新（基于注意力得分）或纯滑动窗口               │
+│  · 实时计算滑动熵统计 (窗口L=20)                             │
+│  · Engram 记忆优化器（可选）                                 │
+└───────────────┬─────────────────────────────────────────────┘
+│
+▼
+┌─────────────────────────────────────────────────────────────┐
+│  L1 生成层（简化双流，可配置）                                │
+│  ┌───────────────────┐    ┌───────────────────────────────┐ │
+│  │ DAN 流             │    │ VAN 流（三级漏斗）             │ │
+│  │ · 工作记忆稀疏注意力 │    │ 1. 关键词匹配（自动机）       │ │
+│  │ · 任务偏置 B_task   │    │ 2. 轻量MLP分类器（每步）     │ │
+│  └─────────┬─────────┘    │ 3. 完整注意力（可选）          │ │
+│            └──────────────┴───────────────┬───────────────┘ │
+│                    可选门控融合（balanced/full模式）         │
+│                           │                                 │
+│              动态温度 τ + 稀疏截断 θ                         │
+│                           │                                 │
+│              遗忘门（始终启用）+ 可选DMN噪声                  │
+│                           │                                 │
+│                     输出 token y                            │
+└─────────────────────────────────────────────────────────────┘
+│
+▼
+┌─────────────────────────────────────────────────────────────┐
+│  审计与复盘系统（可配置）                                     │
+│  · 实时审计：紧凑日志 + 哈希链 + HMAC（始终启用）             │
+│  · 异步审核：可选1.5B模型复核事实性（仅full模式）             │
+│  · 离线复盘：基于日志+快照生成自然语言报告（始终启用）        │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 3.2 三层职责划分
+### 3.2 组件结构
 
-| 层级 | 名称 | 主要职责 | 比喻 |
-|------|------|---------|------|
-| **L1** | 生成层 | 双流注意力融合、token生成、DMN抑制 | 大脑皮层（执行） |
-| **L2** | 工作记忆层 | 上下文压缩、熵统计、稀疏化 | 海马体（记忆） |
-| **L3** | 元控制层 | 熵监控、截断决策、调控信号生成 | 前额叶（调控） |
+```
+enlighten/
+├── adapters/           # 模型适配器
+│   ├── base.py         # 基础适配器（Flash Attention）
+│   ├── vllm_adapter.py # vLLM 适配器
+│   └── deepseek_adapter.py # DeepSeek V3/V4 适配器
+├── api/                # API 客户端
+│   ├── dashscope_client.py # 千问 API 客户端
+│   └── deepseek_client.py # DeepSeek API 客户端
+├── attention/          # 注意力机制
+│   ├── dan.py          # DAN 流注意力
+│   ├── van.py          # VAN 流注意力
+│   ├── fusion.py       # 注意力融合
+│   ├── sparse.py       # 稀疏注意力
+│   └── multimodal_van.py # 多模态 VAN
+├── audit/             # 审计系统
+│   ├── chain.py       # 哈希链
+│   ├── hmac_sign.py   # HMAC 签名
+│   ├── offline_review.py # 离线复盘
+│   ├── review_scheduler.py # 复盘调度器
+│   └── tee_audit.py   # TEE 审计格式
+├── config/            # 配置管理
+│   ├── modes.py       # 模式定义
+│   └── loader.py      # 配置加载器
+├── cutoff/            # 截断控制
+│   ├── cutoff_decision.py # 截断决策
+│   ├── forget_gate.py # 遗忘门
+│   └── dmn.py         # DMN 噪声
+├── memory/            # 工作记忆
+│   ├── working_memory.py # 工作记忆实现
+│   ├── entropy_tracker.py # 熵跟踪器
+│   ├── active_indices.py # 活跃索引管理
+│   └── engram_optimizer.py # Engram 记忆优化器
+├── l1_generation.py   # L1 生成层
+├── l2_working_memory.py # L2 工作记忆层
+├── l3_controller.py   # L3 元控制器
+├── main.py            # 主入口
+└── utils.py           # 工具函数
+```
 
 ---
 
 ## 4. 核心组件详解
 
-### 4.1 L1 生成层组件
+### 4.1 L1 生成层
 
-#### 4.1.1 双流注意力机制
+**DAN 流**（始终启用）：
+- 从 L2 获取活跃键值对，执行稀疏注意力
+- 任务偏置由 L3 根据任务嵌入生成
 
-**DAN (目标驱动注意力网络)**
+**VAN 流**（三级漏斗）：
+| 级别 | 模式 | 描述 |
+|------|------|------|
+| Level 1 | lightweight | 关键词匹配 + 轻量 MLP |
+| Level 2 | balanced | 同上，MLP 每步运行 |
+| Level 3 | full | 额外启用完整注意力 |
 
-```python
-class DANAttention(nn.Module):
-    """
-    目标驱动的主动聚焦
-    特点: 根据任务类型强制引导注意力方向
-    """
+**温度与稀疏截断**：
+\[
+\text{Attn}_{\text{temp}} = \text{softmax}\left(\frac{\text{Attn}_{\text{used}}}{\tau_t}\right)
+\]
+\[
+\text{Attn}_{\text{final}} = \text{renormalize}(\text{Attn}_{\text{temp}} \cdot \mathbf{1}[\text{Attn}_{\text{temp}} > \theta_t])
+\]
 
-    def forward(self, Q, K, V, task_bias):
-        # 任务偏置投影
-        bias = self.task_bias_proj(task_bias)  # [batch, num_heads]
+**遗忘门**（始终启用）：动态更新 KV 缓存
 
-        # 标准缩放点积注意力 + 任务偏置
-        scores = (Q @ K.transpose(-2, -1)) / math.sqrt(self.head_dim)
-        scores = scores + bias.unsqueeze(1)  # 应用任务偏置
+### 4.2 L2 工作记忆层
 
-        attn_weights = F.softmax(scores, dim=-1)
-        attn_output = attn_weights @ V
+**数据结构**：
+- 记忆矩阵 \(M_t \in \mathbb{R}^{m \times d}\)，容量 \(m\) 可配置（256~512）
+- 活跃索引集 \(A_t\)：最近 \(w=128\) 个 token + 所有 VAN 标记敏感 token
+- 熵队列 \(Q_H\)（长度 \(L=20\)）
 
-        return attn_output, attn_weights
-```
+**更新策略**：
+| 策略 | 模式 | 描述 |
+|------|------|------|
+| 滑动窗口 | 始终 | 每步将新 token 加入，超出容量则丢弃最旧非敏感 token |
+| 定期刷新 | 可选 | 每 N 步基于注意力得分重新计算重要性 |
 
-**VAN (刺激驱动注意力网络)**
+**Engram 记忆优化器**（Phase 4 新增）：
+- 记忆巩固机制
+- 稀疏表示优化
+- 压缩和修剪
 
-```python
-class VANAttention(nn.Module):
-    """
-    刺激驱动的自动重定向
-    特点: 检测异常模式，触发硬中断
-    """
+### 4.3 L3 元控制层
 
-    def __init__(self, vocab_size):
-        self.saliency_detector = SaliencyDetector(vocab_size)
-        self.mask_generator = InterruptMaskGenerator()
+**输入**：\(\mu_H, \sigma_H, p_{\text{harm}}, e_{\text{task}}\)
 
-    def forward(self, tokens, hidden_states):
-        # 显著性检测
-        saliency_map = self.saliency_detector(hidden_states)
-
-        # VAN事件检测
-        van_event, event_type = self.detect_van_event(tokens, saliency_map)
-
-        if van_event:
-            mask = self.mask_generator.generate_mask(event_type, hidden_states.shape[1])
-            return mask, True
-
-        return None, False
-```
-
-#### 4.1.2 双流融合
-
-```python
-class AttentionFusion(nn.Module):
-    """
-    融合门控机制
-    公式: Attn_fused = g·Attn_DAN + (1-g)·Attn_VAN
-    """
-
-    def forward(self, attn_dan, attn_van, tau, theta):
-        # 预测融合权重 g ∈ [0, 1]
-        g = torch.sigmoid(self.gate_predictor(
-            torch.cat([attn_dan.mean(), attn_van.mean()])
-        ))
-
-        # 融合
-        fused = g * attn_dan + (1 - g) * attn_van
-
-        # 应用温度 (控制分布锐度)
-        fused = F.softmax(fused / tau, dim=-1)
-
-        # 应用稀疏截断 (只保留>θ的注意力)
-        fused = fused * (fused > theta).float()
-
-        return fused
-```
-
-#### 4.1.3 DMN抑制与遗忘门
-
-**DMN抑制**
-
-```python
-class DMNInhibition(nn.Module):
-    """
-    默认模式网络抑制
-    功能: 抑制内部噪声 ξ，防止无意义自循环
-    """
-
-    def forward(self, hidden_states, alpha):
-        # 估计内部噪声
-        noise = self.noise_estimator(hidden_states)
-
-        # 应用DMN抑制: α · ξ
-        inhibited = hidden_states - alpha * noise * self.inhibition_strength
-
-        return inhibited
-```
-
-**遗忘门**
-
-```python
-class ForgetGate(nn.Module):
-    """
-    遗忘门机制
-    功能: 提供指数衰减的KV缓存，防止"陷入"过去状态
-    """
-
-    def forward(self, prev_hidden, current_input, decay_rate=0.95):
-        # 计算遗忘门值 f ∈ [0, 1]
-        f = torch.sigmoid(self.forget_proj(
-            torch.cat([prev_hidden, current_input])
-        ))
-
-        # 指数衰减
-        decayed = f * decay_rate
-
-        # 选择性遗忘
-        return decayed * prev_hidden + (1 - decayed) * current_input
-```
-
-### 4.2 L2 工作记忆层组件
-
-#### 4.2.1 工作记忆矩阵
-
-```python
-class WorkingMemory(nn.Module):
-    """
-    工作记忆矩阵 M (m × d)
-    - m: 活跃token数量 (远小于n, 默认512)
-    - d: 嵌入维度 (如1024)
-    """
-
-    def __init__(self, m=512, d=1024):
-        self.M = nn.Parameter(torch.zeros(m, d))
-        self.active_indices = []
-        self.m = m
-        self.d = d
-
-    def update(self, key, value, importance_scores):
-        """
-        基于重要性分数更新记忆
-        策略: 保留top-m个最重要的token
-        """
-        # 计算top-m索引
-        topk_indices = torch.topk(importance_scores, self.m).indices
-
-        # 更新记忆矩阵
-        for i, idx in enumerate(topk_indices):
-            self.M[i] = value[idx]
-            self.active_indices[i] = idx.item()
-
-    def get_sparse_kv(self):
-        """
-        返回稀疏的键值对 (K̃, Ṽ)
-        用于L1的稀疏注意力计算
-        """
-        return self.M, self.M, self.active_indices
-```
-
-#### 4.2.2 熵统计追踪器
-
-```python
-class EntropyTracker:
-    """
-    注意力熵统计追踪器
-    计算滑动窗口内的:
-    - 均值 μ_H
-    - 方差 σ_H²
-    - 趋势 k_H
-    """
-
-    def __init__(self, window_size=100):
-        self.window_size = window_size
-        self.history = deque(maxlen=window_size)
-
-    def update(self, attention_weights):
-        """
-        计算并记录当前时刻的注意力熵
-        H = -Σ p_i log(p_i)
-        """
-        entropy = -torch.sum(
-            attention_weights * torch.log(attention_weights + 1e-10),
-            dim=-1
-        ).mean()
-        self.history.append(entropy.item())
-
-    def get_statistics(self):
-        """
-        获取滑动统计
-        """
-        if len(self.history) < 2:
-            return {"mean": 0, "variance": 0, "trend": 0, "current": 0}
-
-        history = torch.tensor(self.history)
-
-        return {
-            "mean": history.mean().item(),        # μ_H
-            "variance": history.var().item(),    # σ_H²
-            "trend": self._compute_trend(history),  # k_H
-            "current": history[-1].item()
-        }
-
-    def _compute_trend(self, history):
-        """
-        计算趋势 (简单线性回归斜率)
-        k_H > 0: 注意力发散
-        k_H < 0: 注意力聚焦
-        """
-        if len(history) < 2:
-            return 0.0
-        x = torch.arange(len(history)).float()
-        return torch.polyfit(x, history, 1)[0].item()
-```
-
-### 4.3 L3 元控制器组件
-
-#### 4.3.1 熵监控与截断决策
-
-```python
-class L3MetaController(nn.Module):
-    """
-    L3 元注意力控制器 (前额叶模拟)
-    核心功能: 熵监控、截断决策、调控信号生成
-    """
-
-    def __init__(self, config):
-        self.entropy_threshold = config.entropy_threshold  # 默认0.5
-        self.variance_threshold = config.variance_threshold  # 默认0.05
-        self.tau_range = config.tau_range  # (0.1, 2.0)
-        self.theta_range = config.theta_range  # (0.5, 0.9)
-
-    def forward(self, entropy_stats, van_event, task_embedding):
-        """
-        决策流程:
-        1. 检查VAN事件 -> 立即截断
-        2. 检查截断判据 -> 条件截断
-        3. 正常调控
-        """
-        mu_h = entropy_stats["mean"]
-        sigma_h = math.sqrt(entropy_stats["variance"])
-        k_h = entropy_stats["trend"]
-
-        # 1. VAN事件处理
-        if van_event:
-            return self._van_cutoff_response()
-
-        # 2. 截断判据检查
-        if self._should_cutoff(mu_h, sigma_h, k_h):
-            return self._cutoff_response(mu_h)
-
-        # 3. 正常调控
-        return self._normal_control(task_embedding)
-
-    def _should_cutoff(self, mu_h, sigma_h, k_h):
-        """
-        截断判据:
-        - 低注意力熵 (μ_H < 0.5)
-        - 低方差 (σ_H < 0.05)
-        - 持续下降趋势 (k_H < 0)
-        """
-        return (mu_h < self.entropy_threshold and
-                sigma_h < self.variance_threshold and
-                k_h < 0)
-
-    def _van_cutoff_response(self):
-        """VAN事件触发的立即截断"""
-        return {
-            "tau": 0.1,    # 降低温度，快速收敛
-            "theta": 0.9,  # 提高阈值，只保留最重要token
-            "alpha": 0.5,  # 增强DMN抑制
-            "s": False,    # 标记为不稳定
-            "cutoff": True,
-            "reason": "VAN event: sensitive content detected"
-        }
-
-    def _cutoff_response(self, mu_h):
-        """自指循环检测触发的截断"""
-        return {
-            "tau": max(0.1, mu_h * 2),  # 与熵成反比
-            "theta": 0.8,
-            "alpha": 0.3,
-            "s": False,
-            "cutoff": True,
-            "reason": "Self-referential loop detected"
-        }
-
-    def _normal_control(self, task_embedding):
-        """正常调控"""
-        return {
-            "tau": 0.7,
-            "theta": 0.7,
-            "alpha": 0.1,
-            "s": True,     # 标记为稳定
-            "cutoff": False,
-            "reason": None
-        }
-```
+**输出**：
+\[
+\tau_t = \text{clamp}(\tau_{\text{base}} + \lambda_\tau \cdot \sigma_H, 0.1, 2.0)
+\]
+\[
+\theta_t = \text{clamp}(\theta_{\text{base}} - \beta \cdot p_{\text{harm}}, 0.0, 0.5)
+\]
+\[
+cutoff_t = \mathbf{1}[(\mu_H < 0.5 \land \sigma_H < 0.05 \land \text{duration} > 5) \lor p_{\text{harm}} > 0.9]
+\]
 
 ---
 
 ## 5. 数据流与控制流
 
-### 5.1 推理流程时序图
+### 5.1 推理流程
 
 ```
-用户输入 ──┐
-           │
-           ▼
-┌──────────────────┐
-│   L3 元控制器     │◄─────────────────────┐
-│   (初始化参数)    │                      │
-└────────┬─────────┘                      │
-         │ 调控信号 (τ, θ, α, s)          │
-         ▼                               │
-┌──────────────────┐                     │
-│   L2 工作记忆     │                     │
-│   (压缩上下文)    │                     │
-└────────┬─────────┘                     │
-         │ 稀疏KV + 熵统计                │
-         ▼                               │
-┌──────────────────┐                      │
-│   L1 双流注意力   │                     │
-│   (生成token)    │─────────────────────►│
-└────────┬─────────┘  反馈(熵,VAN事件)     │
-         │                                  │
-         ▼                                  │
-    [生成token]                              │
-         │                                  │
-         ├──────────────────────────────────┤
-         │                                  │
-         ▼                                  ▼
-┌──────────────────┐            ┌──────────────────┐
-│   L2 更新记忆     │            │   审计日志写入    │
-│   (更新M和A)      │            │   (哈希链+HMAC)   │
-└──────────────────┘            └──────────────────┘
-         │                                  │
-         │ 熵统计                           │
-         └──────────────────────────────────►
-                    L3 反馈循环
+1. 用户输入 → L2 工作记忆
+2. L2 计算注意力权重和熵统计
+3. L3 接收熵统计，生成调控信号
+4. L1 根据调控信号生成输出
+5. 审计日志记录全过程
+6. 返回结果给用户
 ```
 
-### 5.2 状态机模型
+### 5.2 截断流程
 
 ```
-┌─────────────┐    VAN事件     ┌─────────────┐
-│   正常     │──────────────►│   VAN截断   │
-│   状态     │               │   状态      │
-└─────────────┘               └─────────────┘
-       ▲                              │
-       │                              │
-       │ 熵恢复                        │ 截断完成
-       │                              ▼
-       │                       ┌─────────────┐
-       └──────────────────────│   恢复      │
-                               │   状态      │
-                               └─────────────┘
-       ▲                              │
-       │ 持续低熵                      │
-       ▼                              │
-┌─────────────┐                        │
-│   自指截断   │────────────────────────┘
-│   状态      │
-└─────────────┘
+检测到截断条件
+    ↓
+L3 设置 cutoff=1
+    ↓
+终止 L1 生成
+    ↓
+返回预设安全响应
+    ↓
+记录截断事件到审计链
 ```
 
 ---
 
 ## 6. 安全机制
 
-### 6.1 多层防御体系
+### 6.1 多层防御
 
-| 层级 | 机制 | 作用 |
+| 层级 | 机制 | 模式 |
 |------|------|------|
-| **L1** | DAN任务偏置 | 强制引导注意力到安全方向 |
-| **L1** | VAN显著性检测 | 识别并阻断敏感内容 |
-| **L1** | DMN抑制 | 防止无意义自循环 |
-| **L2** | 熵监控 | 实时检测异常模式 |
-| **L3** | 截断决策 | 硬中断问题生成 |
-| **L3** | 调控信号 | 动态调节生成行为 |
-| **系统** | 审计日志 | 完整记录，可追溯 |
+| L1 | VAN 三级漏斗 | lightweight+ |
+| L2 | 熵监控 | 始终 |
+| L3 | 截断决策 | 始终 |
+| 审计 | HMAC + 哈希链 | 始终 |
 
-### 6.2 威胁检测类型
+### 6.2 VAN 分类器
 
-| 威胁类型 | 检测方法 | 响应措施 |
-|---------|---------|---------|
-| **越狱攻击** | 模式匹配 + 熵异常 | 立即截断 |
-| **注入攻击** | 特殊字符序列检测 | 忽略+警告 |
-| **隐私侵犯** | 敏感词匹配 | 过滤+记录 |
-| **DOS攻击** | 请求频率检测 | 限流 |
+- 训练数据：HarmBench、C4 等
+- 阈值：可配置（默认 0.5）
+- 假阳性率控制：< 1%
 
 ---
 
 ## 7. 审计系统
 
-### 7.1 哈希链设计
+### 7.1 实时审计
+
+- **日志格式**：JSONL 每行紧凑记录（约 200 字节）
+- **密码学**：HMAC-SHA256 + 哈希链（每步链接前一步哈希）
+- **存储**：本地文件系统或 TEE 安全存储
+
+### 7.2 异步审核（仅 full 模式）
+
+- 独立进程，运行 1.5B 审核模型
+- 每生成 K 个 token 复核事实性与安全性
+
+### 7.3 离线复盘
+
+- 定时或按需读取审计日志 + L2 快照
+- 调用 7B 模型生成自然语言报告
+
+---
+
+## 8. 配置管理与模式
+
+### 8.1 三种预设模式
+
+| 模式 | 目标场景 | 延迟增加 | 安全截断 | 幻觉抑制 | 审计完整性 |
+|------|----------|---------|----------|----------|-----------|
+| **full** | 高安全/高合规 | +15% | 完整 | 最强 | 完整 |
+| **balanced** | 通用对话（默认） | +10% | 完整 | 中等 | 完整 |
+| **lightweight** | 高吞吐/低延迟 | +5% | 核心 | 基础 | 核心 |
+
+### 8.2 运行时切换
 
 ```python
-class AuditHashChain:
-    """
-    审计哈希链
-    特性:
-    - 链接: H_i = SHA256(H_{i-1} || data_i)
-    - 不可篡改: 任何data_i的修改都会导致后续哈希不匹配
-    - 可验证: 从任意点可验证链的完整性
-    """
-
-    def append(self, data):
-        # 计算当前数据哈希
-        current_hash = sha256(self.serialize(data))
-
-        # 链接到前一个哈希
-        if self.chain:
-            link_hash = sha256(
-                self.serialize({
-                    "prev": self.chain[-1].hash,
-                    "current": current_hash
-                })
-            )
-        else:
-            link_hash = current_hash
-
-        entry = AuditEntry(
-            index=len(self.chain),
-            hash=link_hash,
-            data=data,
-            timestamp=time.time()
-        )
-        self.chain.append(entry)
-        return link_hash
-
-    def verify(self):
-        """从后向前验证"""
-        for i in range(1, len(self.chain)):
-            expected_prev = self.chain[i].data["prev_hash"]
-            actual_prev = self.chain[i-1].hash
-            if expected_prev != actual_prev:
-                return False
-        return True
-```
-
-### 7.2 离线复盘服务
-
-```python
-class OfflineReviewService:
-    """
-    离线复盘服务
-    功能:
-    1. 读取审计日志
-    2. 分析截断事件
-    3. 生成自然语言报告
-    """
-
-    def generate_report(self, session_id):
-        # 获取日志和快照
-        logs = self.get_session_logs(session_id)
-        snapshots = self.get_snapshots(session_id)
-
-        # 分析
-        cutoff_events = self.analyze_cutoffs(logs)
-        attention_patterns = self.analyze_attention(snapshots)
-        safety_events = self.analyze_safety_events(logs)
-
-        # 生成报告
-        return self.format_report({
-            "session_id": session_id,
-            "cutoff_events": cutoff_events,
-            "attention_patterns": attention_patterns,
-            "safety_events": safety_events,
-            "statistics": self.compute_statistics(logs)
-        })
+model.set_mode("lightweight")  # 热切换
 ```
 
 ---
 
-## 8. 配置管理
+## 9. DeepSeek-V4 兼容
 
-### 8.1 配置层次结构
+### 9.1 V4 核心特性
 
-```
-configs/
-├── core_rules.yaml          # 核心价值观敏感词表
-├── task_embeddings.yaml     # 任务嵌入向量
-└── hyperparameters.yaml     # 超参数配置
-```
-
-### 8.2 核心价值观配置 (core_rules.yaml)
-
-```yaml
-negative_vocab:
-  - 暴力相关词
-  - 色情相关词
-  - 歧视相关词
-  - 违法犯罪相关词
-
-positive_vocab:
-  - 和平
-  - 友爱
-  - 正义
-  - 诚信
-
-bias_strength:
-  negative: -1e9   # 强负偏置
-  positive: 2.0    # 弱正偏置
-```
-
-### 8.3 超参数配置 (hyperparameters.yaml)
-
-```yaml
-l1_generation:
-  temperature:
-    default: 0.7
-    range: [0.1, 2.0]
-  sparse_threshold:
-    default: 0.7
-    range: [0.5, 0.9]
-
-l2_working_memory:
-  memory_size: 512       # m: 活跃token数量
-  embedding_dim: 1024    # d: 嵌入维度
-  entropy_window: 100    # 滑动窗口大小
-
-l3_controller:
-  entropy_threshold: 0.5   # μ_H < 0.5 触发截断
-  variance_threshold: 0.05 # σ_H < 0.05 触发截断
-  tau_range: [0.1, 2.0]
-  theta_range: [0.5, 0.9]
-```
-
----
-
-## 9. 扩展性设计
-
-### 9.1 自定义注意力机制
-
-```python
-class CustomAttention(nn.Module):
-    """
-    用户可自定义注意力机制
-    只需实现:
-    1. forward() 方法
-    2. get_attention_weights() 方法
-    """
-
-    def forward(self, Q, K, V):
-        # 自定义注意力实现
-        pass
-
-    def get_attention_weights(self):
-        return self.last_attention_weights
-```
-
-### 9.2 自定义截断判据
-
-```python
-class CustomCutoffStrategy:
-    """
-    用户可自定义截断策略
-    只需实现 should_cutoff() 方法
-    """
-
-    def should_cutoff(self, entropy_stats, van_event, task_embedding):
-        # 自定义截断逻辑
-        pass
-```
-
-### 9.3 模型后端支持
-
-| 后端 | 状态 | 说明 |
-|------|------|------|
-| **HuggingFace Transformers** | ✅ 支持 | 原型验证 |
-| **vLLM** | ⚠️ 规划中 | 生产级优化 |
-| **TensorRT-LLM** | 📋 待定 | 高性能推理 |
-| **Ollama** | 📋 待定 | 本地部署 |
-
----
-
-## 附录
-
-### A. 术语表
-
-| 术语 | 定义 |
+| 特性 | 描述 |
 |------|------|
-| **DAN** | Default Attention Network，目标驱动注意力网络 |
-| **VAN** | Ventral Attention Network，刺激驱动注意力网络 |
-| **DMN** | Default Mode Network，默认模式网络 |
-| **熵** | Attention Entropy，衡量注意力分布的混乱程度 |
-| **截断** | Cutoff，元控制器触发的生成中断 |
+| 参数规模 | 总参数 ~1T，推理激活 ~37B |
+| 上下文窗口 | **1M token** |
+| 注意力机制 | MLA + Engram 条件记忆 |
+| 多模态 | 原生支持图像、视频、音频 |
+| 推理速度 | 较 V3 **提升 35 倍** |
 
-### B. 参考资料
+### 9.2 适配策略
 
-1. Attention Is All You Need (Vaswani et al., 2017)
-2. The Human Attention Network (Corbetta & Shulman, 2002)
-3. Default Mode Network (Raichle et al., 2001)
+| EnlightenLM 组件 | V4 原生能力 | 适配方式 |
+|-----------------|-------------|----------|
+| L1 稀疏注意力 | Sparse Attention + Sliding Window | 直接复用 |
+| L2 工作记忆 | **Engram 条件记忆** | 作为底层存储，O(1) 哈希检索 |
+| VAN 显著性 | 多模态安全对齐表征 | 扩展到视觉/音频域 |
 
 ---
 
-*文档版本: v1.0*
-*最后更新: 2026-04-23*
+## 10. 扩展性设计
+
+### 10.1 自定义组件
+
+```python
+from enlighten import EnlightenLM
+
+class MyCustomVAN(VANInterface):
+    def forward(self, hidden_states):
+        # 自定义实现
+        pass
+
+model = EnlightenLM.from_pretrained("deepseek-ai/DeepSeek-V3")
+model.register_van(MyCustomVAN())
+```
+
+### 10.2 插件系统
+
+支持第三方审核模型集成：
+```yaml
+async_review:
+  enabled: true
+  model: "custom-model/path"
+  api_endpoint: "http://localhost:8000"
+```
+
+---
+
+## 附录：版本历史
+
+| 版本 | 日期 | 变更 |
+|------|------|------|
+| v2.2 | 2026-01-15 | Phase 4 完成，添加多模态 VAN、Engram 优化器 |
+| v2.1 | 2025-12-20 | Phase 3 完成，vLLM 适配器、TEE 审计 |
+| v2.0 | 2025-12-01 | Phase 2 完成，配置模式系统 |
+| v1.0 | 2025-11-15 | 初始版本，Phase 1 概念验证 |

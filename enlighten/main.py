@@ -5,7 +5,6 @@ EnlightenLM Main Entry - 主入口
 
 import torch
 import logging
-import importlib.util
 from typing import Dict, Optional, Any
 from dataclasses import dataclass
 
@@ -17,11 +16,6 @@ from .audit.hmac_sign import HMACSigner
 from .audit.offline_review import OfflineReviewService
 from .config import EnlightenMode, load_config, ModeConfig, get_mode_preset
 from .utils import Timer
-
-_spec = importlib.util.spec_from_file_location("config_module", "enlighten/config.py")
-_config_file = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_config_file)
-EnlightenConfig = _config_file.EnlightenConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
