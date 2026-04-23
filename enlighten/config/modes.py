@@ -29,6 +29,7 @@ class WorkingMemoryConfig:
     refresh_interval: int = 32
     use_topk_refresh: bool = True
     eviction_policy: str = "lru"
+    attention_size: int = 32
 
 
 @dataclass
@@ -56,6 +57,19 @@ class AsyncReviewConfig:
 
 
 @dataclass
+class ModelProviderConfig:
+    """模型提供者配置"""
+    use_local_model: bool = False
+    local_model_name: str = "distilgpt2"
+    local_model_path: Optional[str] = None
+    api_provider: str = "deepseek"
+    api_model: str = "deepseek-chat"
+    device: str = "auto"
+    local_max_length: int = 1024
+    local_temperature: float = 0.7
+
+
+@dataclass
 class ModeConfig:
     """
     模式配置
@@ -69,6 +83,7 @@ class ModeConfig:
         entropy_monitor: 熵监控配置
         cutoff: 截断配置
         async_review: 异步审核配置
+        model_provider: 模型提供者配置 (本地模型 vs API)
     """
     mode: EnlightenMode = EnlightenMode.BALANCED
     van_level: str = "medium"
@@ -78,6 +93,7 @@ class ModeConfig:
     entropy_monitor: EntropyMonitorConfig = field(default_factory=EntropyMonitorConfig)
     cutoff: CutoffConfig = field(default_factory=CutoffConfig)
     async_review: AsyncReviewConfig = field(default_factory=AsyncReviewConfig)
+    model_provider: ModelProviderConfig = field(default_factory=ModelProviderConfig)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'ModeConfig':
@@ -100,6 +116,9 @@ class ModeConfig:
         ar_data = data.get('async_review', {})
         async_review = AsyncReviewConfig(**ar_data) if ar_data else AsyncReviewConfig()
 
+        mp_data = data.get('model_provider', {})
+        model_provider = ModelProviderConfig(**mp_data) if mp_data else ModelProviderConfig()
+
         return cls(
             mode=mode,
             van_level=van_level,
@@ -108,7 +127,8 @@ class ModeConfig:
             working_memory=working_memory,
             entropy_monitor=entropy_monitor,
             cutoff=cutoff,
-            async_review=async_review
+            async_review=async_review,
+            model_provider=model_provider
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -138,6 +158,16 @@ class ModeConfig:
                 'enabled': self.async_review.enabled,
                 'model': self.async_review.model,
                 'interval': self.async_review.interval
+            },
+            'model_provider': {
+                'use_local_model': self.model_provider.use_local_model,
+                'local_model_name': self.model_provider.local_model_name,
+                'local_model_path': self.model_provider.local_model_path,
+                'api_provider': self.model_provider.api_provider,
+                'api_model': self.model_provider.api_model,
+                'device': self.model_provider.device,
+                'local_max_length': self.model_provider.local_max_length,
+                'local_temperature': self.model_provider.local_temperature
             }
         }
 

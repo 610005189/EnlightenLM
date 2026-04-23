@@ -1253,6 +1253,11 @@
                             chatHistory[chatIndex].title = lastUserMsg.content.slice(0, 30) + (lastUserMsg.content.length > 30 ? '...' : '');
                         }
                     }
+                    const saveData = JSON.stringify(chatHistory);
+                    console.log('Saving to localStorage, data length:', saveData.length);
+                    localStorage.setItem('enlighten_chat_history', saveData);
+                    renderChatList();
+                    return;
                 }
             } else {
                 const title = currentMessages.length > 0 && currentMessages[0].role === 'user'

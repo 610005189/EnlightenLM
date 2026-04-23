@@ -1,11 +1,16 @@
 # EnlightenLM · 觉悟三层架构
 
 > 从"静态护栏"到"动态觉悟"——基于认知神经科学的大模型安全推理与元认知框架
-> **版本**：v2.2（Phase 4 完成，支持多模态 VAN）
-> **状态**：设计定稿，工程可落地
+> **版本**：v2.3（API模式简化实现）
+> **状态**：⚠️ 设计愿景 v2.2 / ✅ 实际运行简化版
+
+> **重要说明**：
+> - `docs/architecture.md` 描述的是**完整设计架构**（v2.2愿景）
+> - `enlighten/hybrid_architecture.py` 是**当前实际运行的代码**
+> - 详见 [实现状态总览](./docs/implementation_status.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Status: Production Ready](https://img.shields.io/badge/Status-Production%20Ready-brightgreen)]()
+[![Status: API Mode](https://img.shields.io/badge/Status-API%20Mode-blue)]()
 [![DeepSeek Compatible](https://img.shields.io/badge/DeepSeek-V3%20%7C%20V4-Compatible-blue)]()
 
 ---
@@ -30,17 +35,50 @@
 
 **EnlightenLM** 将大模型推理过程解耦为三层，并借鉴人脑注意力网络（DAN/VAN/DMN）实现实时自我监控与安全截断：
 
-- **L1 生成层**：双流注意力（DAN 目标驱动 + VAN 刺激驱动） + 遗忘门
-- **L2 工作记忆层**：压缩上下文，维护活跃 token 集、实时熵统计
-- **L3 元控制层**：实时调控温度/稀疏度/截断，写入密码学审计链
+> ⚠️ **以下为设计愿景（v2.2文档描述）**：
+> - **L1 生成层**：双流注意力（DAN 目标驱动 + VAN 刺激驱动） + 遗忘门
+> - **L2 工作记忆层**：压缩上下文，维护活跃 token 集、实时熵统计
+> - **L3 元控制层**：实时调控温度/稀疏度/截断，写入密码学审计链
 
-同时融合 DeepSeek 的工程优势（轻量 VAN 漏斗、异步审核可选），并通过 **配置开关** 提供三种运行模式，在安全与性能之间灵活平衡。
+> ✅ **以下为当前实际实现（hybrid_architecture.py）**：
+> - **L1 生成层**：DeepSeek API 或本地模型（无双流/遗忘门/DMN）
+> - **L2 工作记忆层**：会话历史管理 + 文本熵分析 + 近似注意力统计
+> - **L3 元控制层**：敏感词检测 + 自指循环检测 + 文本熵截断（无密码学审计）
 
 **目标**：将额外推理开销控制在 **+5% ~ +15%**，同时实现实时截断、密码级审计与幻觉抑制。
+
+> ⚠️ **注意**：当前API模式下，部分安全监控使用**文本特征近似**而非真实模型注意力，因为DeepSeek API是黑盒无法获取内部状态。
 
 ---
 
 ## 架构总览
+
+### ✅ 实际运行的简化架构（hybrid_architecture.py）
+
+```
+用户输入
+  ↓
+L1生成层: DeepSeek API 或 distilgpt2 本地模型
+  ↓
+L2工作记忆: 会话历史 + 文本熵分析 + 近似注意力统计
+  ↓
+L3 VAN监控: 敏感词检测 + 自指循环检测 + 文本熵截断
+  ↓
+输出 + 安全元信息
+```
+
+**实际实现的功能**：
+- ✅ DeepSeek API 集成
+- ✅ 会话历史管理
+- ✅ 文本熵值计算（词汇多样性/重复率/字符熵）
+- ✅ 敏感词/自指循环检测
+- ✅ 词汇重复检测
+- ✅ Cooldown机制
+- ⚠️ 注意力统计（文本特征近似，非真实注意力）
+
+---
+
+### ⚠️ 设计架构（详见 docs/architecture.md）
 
 ```
 用户输入
@@ -95,9 +133,14 @@
 
 ## 各层详细设计
 
+> ⚠️ **说明**：以下为设计文档描述的功能。实际实现状态请参见 [implementation_status.md](./docs/implementation_status.md)
+
 ### L1 生成层
 
-**DAN 流**（始终启用）：
+**设计功能**（未完全实现）：
+
+> ⚠️ **DAN 流**（始终启用）：仅在骨架代码 `l1_generation.py` 中，未集成运行
+> - 从 L2 获取活跃键值对 \((\tilde{K}, \tilde{V})\)，执行稀疏注意力
 - 从 L2 获取活跃键值对 \((\tilde{K}, \tilde{V})\)，执行稀疏注意力：
   \[
   \text{Attn}_{\text{DAN}} = \text{softmax}\left(\frac{Q_{\text{DAN}} \tilde{K}^\top}{\sqrt{d}}\right) \tilde{V} + B_{\text{task}}
@@ -325,34 +368,39 @@ L2-L3：VAN 敏感 token (16K)     → 永不淘汰
 
 ## 实施路线图
 
-### Phase 1：概念验证（已完成）
+> ⚠️ **重要更新 (v2.3)**：
+> - Phase 1-4 的完成状态指的是**骨架代码**的完成
+> - 实际运行的简化版 (`hybrid_architecture.py`) 已完成核心功能
+> - 完整架构（双流注意力/DMN/遗忘门/哈希链）需要本地模型模式
+
+### Phase 1：概念验证（骨架代码 ✅）
 - ✅ HuggingFace + Qwen2.5-7B 原型
 - ✅ L1 稀疏注意力、L2 简化工作记忆、L3 规则控制器
 
-### Phase 2：配置开关与模式（已完成）
+### Phase 2：配置开关与模式（骨架代码 ✅，API模式简化实现 ✅）
 - ✅ 实现三级配置模式（full/balanced/lightweight）
 - ✅ 集成轻量 VAN MLP 分类器（三级漏斗机制）
-- ✅ 完善审计日志与哈希链（不可篡改、HMAC 签名）
+- ⚠️ 完善审计日志与哈希链（骨架代码有，API模式未使用）
 - ✅ 运行时模式热切换
 - ✅ 环境变量配置覆盖
 
-### Phase 3：生产级优化（已完成）
-- ✅ vLLM 适配器基础架构（PagedAttention、Flash Attention）
-- ✅ TEE 兼容审计数据格式（Intel SGX、AMD SEV、TDX）
-- ✅ 自动化复盘服务调度器（定时快照、报告生成）
-- ✅ 性能基准测试套件（延迟、内存、吞吐量、开销）
-- ✅ 安全测试验证（截断、哈希链、HMAC、TEE 格式）
+### Phase 3：生产级优化（骨架代码 ✅，API模式部分实现）
+- ⚠️ vLLM 适配器基础架构（骨架代码有，未集成）
+- ⚠️ TEE 兼容审计数据格式（骨架代码有，API模式未使用）
+- ⚠️ 自动化复盘服务调度器（骨架代码有，未使用）
+- ✅ 性能基准测试套件
+- ✅ 安全测试验证（VAN监控、截断）
 
-### Phase 4：DeepSeek-V4 适配（已完成）
+### Phase 4：DeepSeek-V4 适配（骨架代码 ✅，API模式 ✅）
 - ✅ DeepSeek 适配器实现（支持 V3/V4、API模式、本地模式）
-- ✅ Engram 记忆优化器（+5% 目标设计、记忆巩固、稀疏表示）
-- ✅ 多模态 VAN 设计（文本/图像/音频编码器、跨模态融合）
+- ✅ Engram 记忆优化器（设计，API模式简化实现）
+- ⚠️ 多模态 VAN 设计（骨架代码有，未集成）
 - ✅ 完整集成测试通过
 
 ### Phase 5：多模态融合（规划中）
-- 实现文本-图像跨模态检测
-- 实现音频-视频模态支持
-- 统一多模态融合框架
+- 规划中：实现文本-图像跨模态检测
+- 规划中：实现音频-视频模态支持
+- 规划中：统一多模态融合框架
 
 ---
 
@@ -363,70 +411,165 @@ L2-L3：VAN 敏感 token (16K)     → 永不淘汰
 ├── README.md
 ├── LICENSE
 ├── requirements.txt
-├── configs/
+├── configs/                      # ⚠️ 骨架代码配置
 │   ├── full.yaml
 │   ├── balanced.yaml
 │   ├── lightweight.yaml
 │   └── custom.yaml.example
 ├── enlighten/
 │   ├── __init__.py
-│   ├── l1_generation.py
-│   ├── l2_working_memory.py
-│   ├── l3_controller.py
-│   ├── audit.py
-│   ├── async_review.py
-│   ├── offline_review.py
-│   ├── config.py
-│   ├── adapters/
-│   │   ├── __init__.py
-│   │   ├── base.py
-│   │   ├── vllm_adapter.py
-│   │   └── deepseek_adapter.py
-│   ├── attention/
-│   │   ├── __init__.py
-│   │   └── multimodal_van.py
-│   └── memory/
-│       ├── __init__.py
-│       └── engram_optimizer.py
+│   ├── hybrid_architecture.py   # ✅ 实际运行的简化架构
+│   ├── api_server.py            # ✅ 实际运行的API服务
+│   ├── api/
+│   │   └── deepseek_client.py   # ✅ 实际使用的API客户端
+│   ├── config/
+│   │   └── modes.py             # ✅ 实际使用的配置
+│   ├── l1_generation.py         # ⚠️ 骨架代码（未集成）
+│   ├── l2_working_memory.py     # ⚠️ 骨架代码（未集成）
+│   ├── l3_controller.py         # ⚠️ 骨架代码（未集成）
+│   ├── audit/                   # ⚠️ 骨架代码（未集成）
+│   ├── attention/               # ⚠️ 骨架代码（未集成）
+│   ├── memory/                  # ⚠️ 骨架代码（未集成）
+│   └── cutoff/                  # ⚠️ 骨架代码（未集成）
 ├── docs/
-│   ├── architecture.md
-│   ├── math_verification.md
-│   └── integration_guide.md
-├── EnlightenLM_Quick_Test/
-│   ├── EnlightenLM_Quick_Test_1.md
-│   └── Experiment_Results.md
-├── examples/
-│   ├── demo_math_reasoning.py
-│   └── demo_safety_cutoff.py
-└── tests/
-    ├── __init__.py
-    ├── test_working_memory.py
-    ├── test_cutoff.py
-    ├── test_audit_chain.py
-    ├── test_deepseek_adapter.py
-    ├── test_engram_optimizer.py
-    ├── test_multimodal_van.py
-    └── test_phase4_integration.py
+│   ├── architecture.md          # ⚠️ 设计架构文档
+│   ├── math_verification.md     # ⚠️ 数学验证（标注实现状态）
+│   ├── math_verification_audit.md # ✅ 实现状态审计报告
+│   ├── implementation_status.md # ✅ 实现状态总览
+│   └── ...
+├── tests/
+│   └── test_hybrid_architecture.py  # ✅ 68个测试通过
+└── docs/chat.html               # ✅ Web聊天界面
 ```
+
+**图例**：
+- ✅ = 实际运行使用的代码
+- ⚠️ = 设计/骨架代码（未在实际运行中集成）
+
+---
+
+## 架构设计完成度对比
+
+### 完成度总览
+
+| 层级 | 模块名称 | 设计功能 | 实现状态 | 完成度 | 未完成原因 |
+|------|----------|----------|----------|--------|------------|
+| **L1 生成层** | 双流注意力 (DAN+VAN) | DAN/VAN 融合 | 骨架代码 | 0% | API黑盒限制，需本地模型 |
+| | DMN噪声抑制 | 噪声估计+抑制 | 骨架代码 | 0% | API黑盒限制 |
+| | 遗忘门 | LSTM式门控 | 骨架代码 | 0% | API黑盒限制 |
+| | 本地模型支持 | Transformer生成 | hybrid_architecture | 60% | 仅支持distilgpt2 |
+| | DeepSeek API集成 | API调用 | hybrid_architecture | 100% | 已完成 |
+| **L2 工作记忆** | 稀疏注意力选择 | Top-k重要性评分 | 骨架代码 | 0% | API黑盒限制 |
+| | 上下文窗口管理 | 滑动窗口/定期刷新 | hybrid_architecture | 100% | 已完成 |
+| | 注意力统计追踪 | 熵值/方差/趋势 | hybrid_architecture | 70% | API模式下为文本近似 |
+| | 记忆矩阵压缩 | m×d矩阵 | 骨架代码 | 0% | 无真实稀疏注意力 |
+| **L3 元控制** | 截断判据(三条件) | μ<τμ ∧ σ<τσ ∧ k<0 | hybrid_architecture | 100% | 已完成 |
+| | 温度动态调节 | τ = f(σ_H) | 骨架代码 | 0% | API黑盒限制 |
+| | 稀疏度动态调节 | θ = f(p_harm) | 骨架代码 | 0% | API黑盒限制 |
+| | 冷却机制 | cooldown防止抖动 | hybrid_architecture | 100% | 已完成 |
+| **VAN 监控** | 敏感词检测 | 正则模式匹配 | hybrid_architecture | 100% | 已完成 |
+| | 自指循环检测 | 词汇模式检测 | hybrid_architecture | 100% | 已完成 |
+| | 词汇重复检测 | bigram重复率 | hybrid_architecture | 100% | 已完成 |
+| | 文本熵分析 | 词汇多样性/字符熵 | hybrid_architecture | 100% | 已完成 |
+| | 多模态VAN | 图像/音频检测 | 骨架代码 | 0% | 未集成 |
+| **审计系统** | 哈希链 | SHA256链式结构 | 骨架代码 | 0% | 未持久化 |
+| | HMAC签名 | 消息认证 | 骨架代码 | 0% | 未集成 |
+| | Merkle树 | 批量验证 | 骨架代码 | 0% | 未集成 |
+| | 事件日志 | 内存记录 | hybrid_architecture | 50% | 仅内存，不持久化 |
+| **配置系统** | 三种预设模式 | full/balanced/lightweight | modes.py | 100% | 已完成 |
+| | 环境变量覆盖 | 配置覆盖 | modes.py | 100% | 已完成 |
+| | 运行时切换 | 热切换 | api_server | 100% | 已完成 |
+| **API服务** | 推理接口 | /inference | api_server | 100% | 已完成 |
+| | 健康检查 | /health | api_server | 100% | 已完成 |
+| | 安全统计 | /security/stats | api_server | 100% | 已完成 |
+| **Web界面** | 聊天界面 | 对话UI | chat.html | 100% | 已完成 |
+| | 主题切换 | 深色/浅色 | chat.html | 100% | 已完成 |
+| | Markdown渲染 | 格式显示 | chat.html | 100% | 已完成 |
+| | 对话持久化 | localStorage | chat.html | 100% | 已完成 |
+
+### 按子系统完成度汇总
+
+| 子系统 | 包含模块数 | 已完成 | 部分完成 | 未完成 | 综合完成度 |
+|--------|-----------|--------|----------|--------|-----------|
+| L1 生成层 | 5 | 1 | 1 | 3 | **40%** |
+| L2 工作记忆 | 4 | 2 | 1 | 1 | **62%** |
+| L3 元控制 | 4 | 2 | 0 | 2 | **50%** |
+| VAN 监控 | 5 | 4 | 0 | 1 | **80%** |
+| 审计系统 | 4 | 0 | 1 | 3 | **12%** |
+| 配置系统 | 3 | 3 | 0 | 0 | **100%** |
+| API服务 | 3 | 3 | 0 | 0 | **100%** |
+| Web界面 | 4 | 4 | 0 | 0 | **100%** |
+| **总计** | **32** | **19** | **3** | **10** | **59%** |
+
+### 未完成功能原因分析
+
+| 原因类别 | 影响模块数 | 说明 |
+|----------|-----------|------|
+| **API黑盒限制** | 8 | DeepSeek API不返回模型内部状态（注意力/loss/logits），无法实现真实监控 |
+| **优先级调整** | 2 | 当前聚焦API模式可用性，完整架构延后 |
+| **技术难度** | 2 | 双流融合、稀疏注意力需要自定义模型支持 |
+| **资源限制** | 1 | 多模态VAN需要额外训练数据和技术验证 |
+
+### 下一步计划
+
+| 优先级 | 模块 | 目标 | 依赖条件 |
+|--------|------|------|----------|
+| P0 | 完善本地模型支持 | 支持更多开源模型（如LLaMA、Qwen） | 模型权重 |
+| P1 | 集成骨架代码 | 将l1/l2/l3_controller集成到实际运行 | 本地模型支持 |
+| P2 | 审计持久化 | 实现哈希链和HMAC持久化存储 | 数据库支持 |
+| P2 | 多模态VAN | 图像输入安全检测 | 视觉编码器 |
 
 ---
 
 ## 快速开始
 
-### 安装
+> ⚠️ **当前实际运行方式**：使用 API 服务器 + Web 界面
+
+### 方式一：API 服务器模式（推荐）
 
 ```bash
-git clone https://github.com/610005189/EnlightenLM.git
-cd EnlightenLM
-pip install -r requirements.txt
+# 设置 API Key
+$env:DEEPSEEK_API_KEY = "sk-你的密钥"
+
+# 启动 API 服务器
+python -m enlighten.api_server
+
+# 启动 Web 界面（另一个终端）
+cd docs
+python -m http.server 8080
 ```
 
-### 使用示例
+访问 http://localhost:8080/chat.html 使用 Web 界面。
+
+### 方式二：直接使用 Python API
 
 ```python
+from enlighten.hybrid_architecture import HybridEnlightenLM
+from enlighten.api.deepseek_client import DeepSeekAPIClient, DeepSeekConfig
+import os
+
+config = DeepSeekConfig(
+    api_key=os.environ["DEEPSEEK_API_KEY"],
+    model="deepseek-chat"
+)
+client = DeepSeekAPIClient(config)
+
+model = HybridEnlightenLM(use_local_model=False, api_client=client)
+result = model.generate("请解释量子纠缠", max_length=512)
+print(result.text)
+```
+
+---
+
+### 设计文档中的使用方式（需要本地模型）
+
+> ⚠️ 以下是完整架构的使用方式，当前 API 模式不支持
+
+```python
+# 完整架构使用方式（设计愿景）
 from enlighten import EnlightenLM
 
-# 加载模型（默认 balanced 模式）
+# 加载模型（默认 balanced 模式）- 需要本地模型
 model = EnlightenLM.from_pretrained("deepseek-ai/DeepSeek-V3", config="configs/balanced.yaml")
 
 # 生成文本
@@ -440,21 +583,6 @@ print(response)
 # 切换到 lightweight 模式（更低延迟）
 model.set_mode("lightweight")
 fast_response = model.generate("你好", max_tokens=50)
-```
-
-### 自定义配置
-
-```python
-from enlighten import EnlightenConfig, EnlightenLM
-
-config = EnlightenConfig(
-    mode="custom",
-    van_level="light",
-    gate_fusion=False,
-    working_memory_capacity=256,
-    refresh_interval=0
-)
-model = EnlightenLM.from_pretrained("deepseek-ai/DeepSeek-V3", config=config)
 ```
 
 ---
