@@ -21,7 +21,7 @@ import os
 
 from .hybrid_architecture import HybridEnlightenLM, GenerationResult
 from .api.deepseek_client import DeepSeekAPIClient, DeepSeekConfig
-from .config.modes import load_config, ModeConfig
+from .config.modes import get_mode_preset, ModeConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -124,7 +124,7 @@ def init_model():
     global _model, _config
 
     try:
-        _config = load_config("balanced")
+        _config = get_mode_preset("balanced")
 
         model_provider = _config.model_provider
         use_local = model_provider.use_local_model

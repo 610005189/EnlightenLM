@@ -25,6 +25,8 @@ import hashlib
 import time
 import os
 
+from .l3_controller import BayesianL3Controller, ControlSignals
+
 
 @dataclass
 class GenerationResult:
@@ -535,7 +537,8 @@ class HybridEnlightenLM:
         use_local_model: bool = False,
         local_model_name: str = "distilgpt2",
         api_client=None,
-        config: Optional[Union[Dict, Any]] = None
+        config: Optional[Union[Dict, Any]] = None,
+        use_bayesian_l3: bool = False
     ):
         if config is None:
             config_dict = {}
@@ -557,6 +560,7 @@ class HybridEnlightenLM:
         self.use_local_model = use_local_model
         self.local_model_name = local_model_name
         self.api_client = api_client
+        self.use_bayesian_l3 = use_bayesian_l3
 
         self.working_memory = WorkingMemoryManager(
             max_history=config_dict.get("max_history", 100),
@@ -572,6 +576,11 @@ class HybridEnlightenLM:
             cooldown_steps=config_dict.get("cooldown_steps", 5),
             enabled=config_dict.get("van_enabled", True)
         )
+
+        # 初始化贝叶斯L3控制器
+        self.bayesian_l3 = None
+        if self.use_bayesian_l3:
+            self.bayesian_l3 = BayesianL3Controller()
 
         self.local_model = None
         self.local_tokenizer = None
@@ -605,6 +614,8 @@ class HybridEnlightenLM:
         prompt: str,
         max_length: int = 1024,
         temperature: float = 0.7,
+        enable_trace: bool = False,
+        trace_callback: Optional[Any] = None,
         **kwargs
     ) -> GenerationResult:
         """
@@ -614,6 +625,8 @@ class HybridEnlightenLM:
             prompt: 输入提示
             max_length: 最大生成长度
             temperature: 生成温度
+            enable_trace: 是否启用Trace记录
+            trace_callback: Trace记录回调函数，签名为 callback(mu_H, sigma_H2, k_H, p_harm_raw)
 
         Returns:
             GenerationResult: 生成结果
@@ -647,31 +660,65 @@ class HybridEnlightenLM:
 
         entropy_stats = self.working_memory.compute_entropy_stats()
 
-        should_cutoff, cutoff_reason, output_risk = self.van_monitor.check_output(output_text, entropy_stats)
-
-        if should_cutoff:
-            return GenerationResult(
-                text="[内容被VAN监控系统截断 - " + cutoff_reason + "]",
-                tokens=tokens,
-                latency=time.time() - start_time,
-                cutoff=True,
-                cutoff_reason=cutoff_reason,
+        # 使用贝叶斯L3控制器进行决策
+        if self.use_bayesian_l3 and self.bayesian_l3:
+            # 检查VAN事件
+            van_event, van_reason, van_risk = self.van_monitor.check_output(output_text, entropy_stats)
+            
+            # 获取贝叶斯L3控制器的决策
+            control_signals = self.bayesian_l3.forward(
                 entropy_stats=entropy_stats,
-                van_event=True,
-                security_verified=False
+                van_event=van_event,
+                p_harm=van_risk
             )
+            
+            if control_signals.cutoff:
+                return GenerationResult(
+                    text="[内容被贝叶斯L3监控系统截断 - " + (control_signals.reason or "高风险内容") + "]",
+                    tokens=tokens,
+                    latency=time.time() - start_time,
+                    cutoff=True,
+                    cutoff_reason=control_signals.reason,
+                    entropy_stats=entropy_stats,
+                    van_event=van_event,
+                    security_verified=False
+                )
+        else:
+            # 使用传统VAN监控
+            should_cutoff, cutoff_reason, output_risk = self.van_monitor.check_output(output_text, entropy_stats)
 
-        entropy_cutoff, entropy_reason = self.van_monitor.should_cutoff_by_entropy(entropy_stats)
-        if entropy_cutoff:
-            return GenerationResult(
-                text="[内容因熵值异常被截断 - " + entropy_reason + "]",
-                tokens=tokens,
-                latency=time.time() - start_time,
-                cutoff=True,
-                cutoff_reason=entropy_reason,
-                entropy_stats=entropy_stats,
-                van_event=True,
-                security_verified=False
+            if should_cutoff:
+                return GenerationResult(
+                    text="[内容被VAN监控系统截断 - " + cutoff_reason + "]",
+                    tokens=tokens,
+                    latency=time.time() - start_time,
+                    cutoff=True,
+                    cutoff_reason=cutoff_reason,
+                    entropy_stats=entropy_stats,
+                    van_event=True,
+                    security_verified=False
+                )
+
+            entropy_cutoff, entropy_reason = self.van_monitor.should_cutoff_by_entropy(entropy_stats)
+            if entropy_cutoff:
+                return GenerationResult(
+                    text="[内容因熵值异常被截断 - " + entropy_reason + "]",
+                    tokens=tokens,
+                    latency=time.time() - start_time,
+                    cutoff=True,
+                    cutoff_reason=entropy_reason,
+                    entropy_stats=entropy_stats,
+                    van_event=True,
+                    security_verified=False
+                )
+
+        if enable_trace and trace_callback is not None:
+            signals = self.get_l3_trace_signals()
+            trace_callback(
+                mu_H=signals["mu_H"],
+                sigma_H2=signals["sigma_H2"],
+                k_H=signals["k_H"],
+                p_harm_raw=signals["p_harm_raw"]
             )
 
         return GenerationResult(
@@ -847,10 +894,12 @@ class HybridEnlightenLM:
         """重置所有状态"""
         self.working_memory.reset()
         self.van_monitor.reset()
+        if self.bayesian_l3:
+            self.bayesian_l3.reset()
 
     def get_status(self) -> Dict[str, Any]:
         """获取状态信息"""
-        return {
+        status = {
             "mode": "local" if self.use_local_model else "api",
             "model": self.local_model_name if self.use_local_model else "deepseek",
             "working_memory_tokens": self.working_memory.token_count,
@@ -859,5 +908,38 @@ class HybridEnlightenLM:
                 "entropy": self.working_memory.compute_attention_stats().entropy,
                 "stability": self.working_memory.compute_attention_stats().stability_score
             },
-            "van_stats": self.van_monitor.get_statistics()
+            "van_stats": self.van_monitor.get_statistics(),
+            "use_bayesian_l3": self.use_bayesian_l3
+        }
+        
+        if self.bayesian_l3:
+            status["bayesian_l3_stats"] = self.bayesian_l3.get_statistics()
+        
+        return status
+
+    def get_l3_trace_signals(self) -> Dict[str, float]:
+        """
+        获取L3贝叶斯控制器的输入信号
+
+        对应论文内部信号:
+        - mu_H (mean): 后验熵均值 -> entropy_stats['mean']
+        - sigma_H2 (variance): 后验熵方差 -> entropy_stats['variance']
+        - k_H (trend): 熵变化趋势 -> entropy_stats['trend']
+        - p_harm_raw: VAN风险值 -> van_monitor 最新风险
+
+        Returns:
+            Dict containing mu_H, sigma_H2, k_H, p_harm_raw
+        """
+        entropy_stats = self.working_memory.compute_entropy_stats()
+
+        last_risk = 0.0
+        if self.van_monitor.decision_history:
+            last_decision = self.van_monitor.decision_history[-1]
+            last_risk = last_decision.get("risk_score", 0.0)
+
+        return {
+            "mu_H": entropy_stats["mean"],
+            "sigma_H2": entropy_stats["variance"],
+            "k_H": entropy_stats["trend"],
+            "p_harm_raw": last_risk
         }

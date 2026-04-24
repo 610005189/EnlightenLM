@@ -8,6 +8,14 @@ import requests
 from typing import Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 
+# 加载环境变量
+from dotenv import load_dotenv
+from pathlib import Path
+
+# 从项目根目录加载.env文件
+env_path = Path(__file__).parent.parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
+
 
 @dataclass
 class DeepSeekConfig:

@@ -78,6 +78,11 @@
             transition: var(--transition);
         }
 
+        .sidebar.collapsed {
+            width: 0;
+            overflow: hidden;
+        }
+
         .sidebar-header {
             padding: 20px;
             border-bottom: 1px solid var(--border-color);
@@ -1021,7 +1026,7 @@
 
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
-            sidebar.classList.toggle('open');
+            sidebar.classList.toggle('collapsed');
         }
 
         function formatTime(date) {

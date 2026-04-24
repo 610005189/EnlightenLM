@@ -463,3 +463,250 @@ class AdaptiveL3Controller(nn.Module):
             cutoff=False,
             reason=None
         )
+
+
+class BayesianL3Controller(nn.Module):
+    """
+    贝叶斯L3元控制器 - 基于贝叶斯病因推断
+    
+    输入:
+    - L2的熵统计 (μ_H, σ_H², k_H, p_harm_raw)
+    
+    输出:
+    - 温度 τ ∈ [0.2, 2.0]
+    - 稀疏阈值 θ ∈ [0.5, 0.9]
+    - DMN系数 α ∈ [0.0, 1.0]
+    - 稳定性标志 s ∈ {0, 1}
+    - 截断信号 cutoff ∈ {0, 1}
+    - 连续截断信心 p_harm ∈ [0, 1]
+    - 病因后验概率 P(H | o_int)
+    """
+
+    def __init__(self, prior_probs=[0.6, 0.2, 0.2]):
+        super().__init__()
+        import numpy as np
+        self.p_H = np.array(prior_probs)   # P(H1), P(H2), P(H3)
+        # 三种假设的似然模型参数
+        self.models = {
+            'normal': {
+                'mu_std': 0.01,  # 过程噪声
+                'obs_std': 0.02   # 观测噪声
+            },
+            'noise_injection': {
+                'mu_std': 0.5,    # 高过程噪声
+                'obs_std': 0.1
+            },
+            'bias_injection': {
+                'mu_std': 0.01,
+                'obs_std': 0.02,
+                'step_gain': 2.0  # 偏见阶跃增益
+            }
+        }
+
+        self.cutoff_cooldown = 10
+        self.cooldown_counter = 0
+        self.decision_history: List[DecisionRecord] = []
+        self.step_counter = 0
+
+    def forward(
+        self,
+        entropy_stats: Dict[str, float],
+        van_event: bool = False,
+        p_harm: float = 0.0,
+        task_embedding: Optional[torch.Tensor] = None
+    ) -> ControlSignals:
+        """
+        L3层前向传播 - 贝叶斯元控制决策
+        
+        Args:
+            entropy_stats: 来自L2的熵统计字典
+                - mean: μ_H 熵均值
+                - variance: σ_H² 熵方差
+                - trend: k_H 趋势
+                - current: 当前熵值
+            van_event: 是否触发VAN事件
+            p_harm: VAN检测的有害概率
+            task_embedding: 任务嵌入向量
+        
+        Returns:
+            ControlSignals: 调控信号
+        """
+        import numpy as np
+        self.step_counter += 1
+
+        # 构建观测向量
+        o_int = {
+            'mu_H': entropy_stats.get("mean", 0.0),
+            'sigma_H2': entropy_stats.get("variance", 0.0),
+            'k_H': entropy_stats.get("trend", 0.0),
+            'p_harm_raw': p_harm
+        }
+
+        # 计算似然
+        likelihoods = []
+        for condition in ['normal', 'noise_injection', 'bias_injection']:
+            model = self.models[condition]
+            # 简化的似然计算
+            if condition == 'normal':
+                # 正常状态：低方差，稳定趋势
+                lik = np.exp(-0.5 * (o_int['sigma_H2']/0.05)**2) * \
+                      np.exp(-0.5 * (abs(o_int['k_H'])/0.1)**2)
+            elif condition == 'noise_injection':
+                # 噪声状态：高方差
+                lik = np.exp(-0.5 * ((o_int['sigma_H2']-0.2)/0.1)**2)
+            else:  # bias_injection
+                # 偏见状态：低均值，高危险值
+                # 低均值的似然
+                mu_lik = np.exp(-0.5 * ((o_int['mu_H']-0.2)/0.05)**2)  # 以0.2为中心
+                # 高危险值的似然
+                harm_lik = np.exp(-0.5 * ((o_int['p_harm_raw']-0.8)/0.1)**2)  # 以0.8为中心
+                # 负趋势的似然
+                trend_lik = np.exp(-0.5 * ((o_int['k_H']+0.1)/0.05)**2)  # 以-0.1为中心
+                lik = mu_lik * harm_lik * trend_lik
+            likelihoods.append(lik)
+
+        # 贝叶斯更新
+        unnorm = self.p_H * np.array(likelihoods)
+        self.p_H = unnorm / unnorm.sum()
+
+        # 温度调节
+        tau_default = 1.0
+        tau = tau_default * (1.0 - 0.5 * self.p_H[2]) * (1.0 + 0.3 * self.p_H[1])
+        tau = np.clip(tau, 0.2, 2.0)
+
+        # 连续截断信心
+        p_harm = self.p_H[2] * 0.5 + o_int['p_harm_raw'] * 0.5  # 增加原始危险值的权重
+
+        # 截断决策
+        cutoff = False
+        reason = None
+        if van_event:
+            cutoff = True
+            reason = "VAN event: sensitive content detected"
+            self.cooldown_counter = self.cutoff_cooldown
+        elif p_harm > 0.6 or o_int['p_harm_raw'] > 0.8:
+            cutoff = True
+            reason = f"High harm probability: {p_harm:.2f}"
+            self.cooldown_counter = self.cutoff_cooldown
+        elif self.cooldown_counter > 0:
+            self.cooldown_counter -= 1
+            reason = "Cooldown"
+
+        # 记录决策
+        self._record_decision(
+            entropy_mean=o_int['mu_H'],
+            entropy_variance=o_int['sigma_H2'],
+            van_event=van_event,
+            p_harm=p_harm,
+            cutoff=cutoff,
+            reason=reason
+        )
+
+        # 生成调控信号
+        return ControlSignals(
+            tau=float(tau),
+            theta=0.7,
+            alpha=0.1,
+            stability=not cutoff,
+            cutoff=cutoff,
+            reason=reason
+        )
+
+    def _record_decision(
+        self,
+        entropy_mean: float,
+        entropy_variance: float,
+        van_event: bool,
+        p_harm: float,
+        cutoff: bool,
+        reason: Optional[str]
+    ) -> None:
+        """
+        记录决策历史
+        
+        Args:
+            entropy_mean: 熵均值
+            entropy_variance: 熵方差
+            van_event: VAN事件标志
+            p_harm: 有害概率
+            cutoff: 是否截断
+            reason: 决策原因
+        """
+        record = DecisionRecord(
+            step=self.step_counter,
+            entropy_mean=entropy_mean,
+            entropy_variance=entropy_variance,
+            van_event=van_event,
+            p_harm=p_harm,
+            cutoff=cutoff,
+            cooldown_remaining=self.cooldown_counter,
+            reason=reason
+        )
+        self.decision_history.append(record)
+
+        if len(self.decision_history) > 1000:
+            self.decision_history.pop(0)
+
+    def get_posterior(self) -> Dict[str, float]:
+        """
+        获取当前病因后验概率
+        
+        Returns:
+            病因后验概率字典
+        """
+        return {
+            'normal': float(self.p_H[0]),
+            'noise_injection': float(self.p_H[1]),
+            'bias_injection': float(self.p_H[2])
+        }
+
+    def reset(self) -> None:
+        """
+        重置贝叶斯L3控制器状态
+        """
+        import numpy as np
+        self.p_H = np.array([0.8, 0.1, 0.1])
+        self.cooldown_counter = 0
+        self.decision_history = []
+        self.step_counter = 0
+
+    def get_history(self, last_n: Optional[int] = None) -> List[DecisionRecord]:
+        """
+        获取决策历史
+        
+        Args:
+            last_n: 返回最近的N条记录，None表示全部
+        
+        Returns:
+            决策记录列表
+        """
+        if last_n is None:
+            return self.decision_history.copy()
+        return self.decision_history[-last_n:]
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """
+        获取决策统计信息
+        
+        Returns:
+            统计信息字典
+        """
+        if not self.decision_history:
+            return {
+                "total_decisions": 0,
+                "posterior": self.get_posterior()
+            }
+
+        cutoffs = [r for r in self.decision_history if r.cutoff]
+        van_events = [r for r in self.decision_history if r.van_event]
+        cooldowns = [r for r in self.decision_history if r.reason == "Cooldown"]
+
+        return {
+            "total_decisions": len(self.decision_history),
+            "total_cutoffs": len(cutoffs),
+            "total_van_events": len(van_events),
+            "total_cooldowns": len(cooldowns),
+            "cooldown_counter": self.cooldown_counter,
+            "cutoff_ratio": len(cutoffs) / len(self.decision_history) if self.decision_history else 0,
+            "posterior": self.get_posterior()
+        }
