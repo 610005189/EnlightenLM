@@ -932,10 +932,8 @@ class HybridEnlightenLM:
         """
         entropy_stats = self.working_memory.compute_entropy_stats()
 
-        last_risk = 0.0
-        if self.van_monitor.decision_history:
-            last_decision = self.van_monitor.decision_history[-1]
-            last_risk = last_decision.get("risk_score", 0.0)
+        last_decision = self.van_monitor.decision_history[-1] if self.van_monitor and self.van_monitor.decision_history else {}
+        last_risk = last_decision.get("risk_score", 0.0)
 
         return {
             "mu_H": entropy_stats["mean"],
