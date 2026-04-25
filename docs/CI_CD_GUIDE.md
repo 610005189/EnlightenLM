@@ -78,7 +78,7 @@
 
 | 参数 | 描述 | 必填 | 默认值 |
 |------|------|------|--------|
-| version | 版本号 (如 2.3.0) | 是 | - |
+| version | 版本号 (如 2.5.0) | 是 | - |
 | environment | 目标环境 | 是 | test |
 
 ### 工作流程
@@ -150,15 +150,15 @@ python -m build
 2. 更新版本号:
    ```bash
    # pyproject.toml
-   version = "2.3.0"
+   version = "2.5.0"
    
    # enlighten/__init__.py
-   __version__ = "2.3.0"
+   __version__ = "2.5.0"
    ```
 3. 创建 Git tag:
    ```bash
-   git tag v2.3.0
-   git push origin v2.3.0
+   git tag v2.5.0
+   git push origin v2.5.0
    ```
 4. 在 GitHub Actions 页面手动触发 `Release to PyPI` workflow
 5. 填写版本号和目标环境 (先选择 `test`)

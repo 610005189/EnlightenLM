@@ -1,0 +1,39 @@
+groups:
+  - name: enlightenlm_alerts
+    interval: 30s
+    rules:
+      - alert: EnlightenLMAPIHighLatency
+        expr: histogram_quantile(0.95, rate(enlightenlm_request_duration_seconds_bucket[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "EnlightenLM API 高延迟告警"
+          description: "API 响应时间 P95 > 5s，当前值: {{ $value }}s"
+
+      - alert: EnlightenLMAPIHighErrorRate
+        expr: rate(enlightenlm_requests_total{status=~"5.."}[5m]) / rate(enlightenlm_requests_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "EnlightenLM API 高错误率告警"
+          description: "API 5xx 错误率 > 5%，当前值: {{ $value | humanizePercentage }}"
+
+      - alert: EnlightenLMSecurityEventsHigh
+        expr: rate(enlightenlm_van_events_total[5m]) / rate(enlightenlm_requests_total[5m]) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "EnlightenLM 安全事件过多告警"
+          description: "VAN 安全事件率 > 10%，当前值: {{ $value | humanizePercentage }}"
+
+      - alert: EnlightenLMServiceDown
+        expr: up{job="enlightenlm-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "EnlightenLM 服务不可用"
+          description: "EnlightenLM API 服务已停止运行超过 1 分钟"

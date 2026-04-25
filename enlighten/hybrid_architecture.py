@@ -25,8 +25,709 @@ import hashlib
 import time
 import os
 
-from .l3_controller import BayesianL3Controller, ControlSignals
+from .l3_controller import (
+    BayesianL3Controller,
+    EnhancedBayesianL3Controller,
+    ControlSignals as SkeletonControlSignals,
+    L3Controller,
+    DecisionRecord,
+    ContextualTemperatureController,
+    TemperatureConfig,
+    OutputStabilityMonitor,
+    SceneType
+)
 from .api.ollama_client import OllamaAPIClient, OllamaConfig
+from .attention.dan import DANAttention
+from .attention.van import VANFunnel
+from .attention.fusion import AttentionFusion, StabilityTracker
+from .cutoff.dmn import DMNInhibition
+from .cutoff.forget_gate import ForgetGate
+from .l2_working_memory import L2WorkingMemory, SimplifiedL2, L2Output as SkeletonL2Output
+from .memory.working_memory import WorkingMemory
+from .memory.entropy_tracker import EntropyTracker
+from .attention.sparse import SparseAttention
+
+
+@dataclass
+class L2Result:
+    """L2层输出结果（适配骨架代码和Hybrid Architecture）"""
+    sparse_kv: Optional[Tuple[torch.Tensor, torch.Tensor]]
+    active_indices: list
+    entropy_stats: Dict[str, float]
+    memory_snapshot: Dict[str, Any]
+    use_skeleton: bool = False
+
+
+class L2WorkingMemoryAdapter(nn.Module):
+    """
+    L2工作记忆适配器
+
+    将骨架代码的L2WorkingMemory集成到Hybrid Architecture
+
+    功能:
+    - 上下文压缩: n个token → m个活跃token
+    - 熵统计计算: 追踪注意力熵的滑动统计
+    - 活跃索引管理: 维护活跃token索引集A
+    - 稀疏键值提供: (K̃, Ṽ) 给L1
+
+    数据流:
+    Input → WorkingMemory → EntropyTracker → SparseAttention → Output
+    """
+
+    def __init__(
+        self,
+        memory_size: int = 512,
+        embedding_dim: int = 768,
+        config: Optional[Dict] = None
+    ):
+        super().__init__()
+        self.memory_size = memory_size
+        self.embedding_dim = embedding_dim
+
+        config = config or {}
+
+        self.skeleton_l2 = L2WorkingMemory(
+            memory_size=memory_size,
+            embedding_dim=embedding_dim,
+            config={
+                "update_strategy": config.get("update_strategy", "topk"),
+                "hierarchical_sizes": config.get("hierarchical_sizes", [64, 256, 512]),
+                "entropy_window": config.get("entropy_window", 100),
+                "entropy_compute_interval": config.get("entropy_compute_interval", 1),
+                "ema_decay": config.get("ema_decay", 0.99),
+                "eviction_policy": config.get("eviction_policy", "lru"),
+                "sparse_mode": config.get("sparse_mode", "topk"),
+                "use_hierarchical": config.get("use_hierarchical", False)
+            }
+        )
+
+        self.sparse_attention = SparseAttention(
+            embed_dim=embedding_dim,
+            memory_size=memory_size,
+            mode=config.get("sparse_mode", "topk")
+        )
+
+        self._entropy_stats_history: deque = deque(maxlen=100)
+        self._last_sparse_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+        self._last_active_indices: list = []
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_weights: Optional[torch.Tensor] = None,
+        update_memory: bool = True
+    ) -> L2Result:
+        """
+        L2适配器前向传播
+
+        Args:
+            hidden_states: [batch, seq_len, embed_dim] 来自L1的hidden states
+            attention_weights: [batch, seq_len, seq_len] 注意力权重
+            update_memory: 是否更新记忆
+
+        Returns:
+            L2Result: 包含稀疏KV、熵统计和记忆快照
+        """
+        batch_size, seq_len, embed_dim = hidden_states.shape
+
+        key = hidden_states
+        value = hidden_states
+
+        if update_memory:
+            self.skeleton_l2.working_memory.update(key, value, attention_weights)
+
+        sparse_k, sparse_v, active_indices = self.skeleton_l2.working_memory.get_sparse_kv()
+
+        if attention_weights is not None:
+            self.skeleton_l2.entropy_tracker.update(attention_weights)
+
+        entropy_stats = self.skeleton_l2.entropy_tracker.get_statistics()
+
+        self._entropy_stats_history.append(entropy_stats)
+        self._last_sparse_kv = (sparse_k, sparse_v)
+        self._last_active_indices = active_indices
+
+        memory_snapshot = self.skeleton_l2.working_memory.get_memory_snapshot()
+
+        return L2Result(
+            sparse_kv=(sparse_k, sparse_v),
+            active_indices=active_indices,
+            entropy_stats=entropy_stats,
+            memory_snapshot=memory_snapshot,
+            use_skeleton=True
+        )
+
+    def get_sparse_attention_output(
+        self,
+        query: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        使用稀疏注意力处理query
+
+        Args:
+            query: [batch, seq_len, embed_dim] 查询向量
+            attention_mask: [batch, seq_len] 注意力掩码
+
+        Returns:
+            output: [batch, seq_len, embed_dim] 稀疏注意力输出
+            attention_weights: 注意力权重
+        """
+        if self._last_sparse_kv is None:
+            return query, torch.ones_like(query[:, :, :1])
+
+        sparse_k, sparse_v = self._last_sparse_kv
+
+        output, attention_weights = self.sparse_attention(
+            query=query,
+            key=sparse_k.unsqueeze(0).expand(query.size(0), -1, -1),
+            value=sparse_v.unsqueeze(0).expand(query.size(0), -1, -1),
+            attention_mask=attention_mask
+        )
+
+        return output, attention_weights
+
+    def should_cutoff(self) -> bool:
+        """
+        判断是否应该截断
+
+        使用熵统计和活跃索引判断
+        """
+        return self.skeleton_l2.should_cutoff()
+
+    def select_sparse_indices(
+        self,
+        attention_weights: torch.Tensor,
+        topk: int = 32
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        基于注意力权重选择稀疏索引
+
+        Args:
+            attention_weights: [batch, seq_len, seq_len] 注意力权重
+            topk: 选择的top-k索引数
+
+        Returns:
+            selected_k: 选中的key
+            selected_v: 选中的value
+        """
+        if self._last_sparse_kv is None:
+            return None, None
+
+        sparse_k, sparse_v = self._last_sparse_kv
+
+        importance = torch.norm(sparse_k, dim=-1)
+
+        _, topk_indices = torch.topk(importance, k=min(topk, len(importance)))
+
+        selected_k = sparse_k[topk_indices]
+        selected_v = sparse_v[topk_indices]
+
+        return selected_k, selected_v
+
+    def reset(self) -> None:
+        """重置工作记忆状态"""
+        self.skeleton_l2.reset()
+        self._entropy_stats_history.clear()
+        self._last_sparse_kv = None
+        self._last_active_indices = []
+
+    def get_entropy_stats(self) -> Dict[str, float]:
+        """获取当前熵统计"""
+        return self.skeleton_l2.entropy_tracker.get_statistics()
+
+    def get_last_entropy_stats(self) -> Dict[str, float]:
+        """获取上次更新的熵统计"""
+        if self._entropy_stats_history:
+            return self._entropy_stats_history[-1]
+        return {
+            "mean": 0.0,
+            "variance": 0.0,
+            "trend": 0.0,
+            "current": 0.0,
+            "ema": 0.0
+        }
+
+
+class SimplifiedL2Adapter(nn.Module):
+    """
+    简化版L2适配器 - 用于快速原型验证
+
+    提供与完整L2WorkingMemoryAdapter相同接口的简化实现
+    """
+
+    def __init__(self, memory_size: int = 512, embedding_dim: int = 768):
+        super().__init__()
+        self.memory_size = memory_size
+        self.embedding_dim = embedding_dim
+
+        self.memory = nn.Parameter(torch.zeros(memory_size, embedding_dim))
+        self.entropy_tracker = EntropyTracker(window_size=50)
+
+        self._last_sparse_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_weights: Optional[torch.Tensor] = None,
+        update_memory: bool = True
+    ) -> L2Result:
+        """
+        简化版前向传播
+
+        Returns:
+            L2Result: 包含稀疏KV、熵统计和记忆快照
+        """
+        if attention_weights is not None:
+            self.entropy_tracker.update(attention_weights)
+
+        importance = torch.norm(hidden_states, dim=-1).mean(dim=0)
+
+        k = min(self.memory_size, importance.size(0))
+        if k > 0:
+            topk_indices = torch.topk(importance, k=k).indices
+
+            for i, idx in enumerate(topk_indices):
+                self.memory.data[i] = hidden_states[:, idx, :].mean(dim=0).detach()
+
+        self._last_sparse_kv = (self.memory, self.memory)
+
+        entropy_stats = self.entropy_tracker.get_statistics()
+
+        memory_snapshot = {
+            'memory': self.memory.data.clone(),
+            'active_indices': [],
+            'sensitive_indices': [],
+            'memory_size': self.memory_size,
+            'embedding_dim': self.embedding_dim
+        }
+
+        return L2Result(
+            sparse_kv=(self.memory, self.memory),
+            active_indices=[],
+            entropy_stats=entropy_stats,
+            memory_snapshot=memory_snapshot,
+            use_skeleton=True
+        )
+
+    def get_sparse_attention_output(
+        self,
+        query: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """使用稀疏注意力处理query"""
+        if self._last_sparse_kv is None:
+            return query, torch.ones_like(query[:, :, :1])
+
+        sparse_k, sparse_v = self._last_sparse_kv
+
+        batch_size = query.size(0)
+        sparse_k_expanded = sparse_k.unsqueeze(0).expand(batch_size, -1, -1)
+        sparse_v_expanded = sparse_v.unsqueeze(0).expand(batch_size, -1, -1)
+
+        scores = torch.matmul(query, sparse_k_expanded.transpose(-2, -1)) / (self.embedding_dim ** 0.5)
+        attention_weights = torch.nn.functional.softmax(scores, dim=-1)
+        output = torch.matmul(attention_weights, sparse_v_expanded)
+
+        return output, attention_weights
+
+    def should_cutoff(self) -> bool:
+        """判断是否应该截断"""
+        return self.entropy_tracker.should_cutoff()
+
+    def select_sparse_indices(
+        self,
+        attention_weights: torch.Tensor,
+        topk: int = 32
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """基于注意力权重选择稀疏索引"""
+        if self._last_sparse_kv is None:
+            return None, None
+
+        sparse_k, sparse_v = self._last_sparse_kv
+
+        importance = torch.norm(sparse_k, dim=-1)
+        _, topk_indices = torch.topk(importance, k=min(topk, len(importance)))
+
+        return sparse_k[topk_indices], sparse_v[topk_indices]
+
+    def reset(self) -> None:
+        """重置状态"""
+        self.entropy_tracker.reset()
+        self._last_sparse_kv = None
+
+    def get_entropy_stats(self) -> Dict[str, float]:
+        """获取熵统计"""
+        return self.entropy_tracker.get_statistics()
+
+
+class L1Adapter(nn.Module):
+    """
+    L1 双流注意力适配器
+
+    将骨架代码的 DAN/VAN 融合和遗忘门机制适配到 Hybrid Architecture
+
+    功能:
+    - DAN (目标驱动注意力网络): 任务偏置引导的主动聚焦
+    - VAN (变异性吸引子网络): 敏感内容检测
+    - Attention Fusion: 双流动态融合
+    - DMN 抑制: 防止无意义自循环
+    - Forget Gate: 指数衰减 KV 缓存
+
+    数据流:
+    Input → DAN → VAN → Fusion → DMN → ForgetGate → Output
+    """
+
+    def __init__(
+        self,
+        embed_dim: int = 768,
+        num_heads: int = 12,
+        task_bias_dim: int = 128,
+        van_level: str = "medium",
+        sensitive_keywords: Optional[List[str]] = None,
+        memory_size: int = 512
+    ):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.task_bias_dim = task_bias_dim
+
+        self.dan = DANAttention(
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            task_bias_dim=task_bias_dim
+        )
+
+        self.van = VANFunnel(
+            level=van_level,
+            embed_dim=embed_dim,
+            vocab_size=50000,
+            sensitive_keywords=sensitive_keywords
+        )
+
+        self.fusion = AttentionFusion(
+            embed_dim=embed_dim,
+            gate_hidden_dim=embed_dim // 4
+        )
+
+        self.dmn = DMNInhibition(embed_dim=embed_dim)
+        self.forget_gate = ForgetGate(embed_dim=embed_dim)
+
+        self.stability_tracker = StabilityTracker(threshold=0.1)
+
+        self.prev_hidden = None
+        self.control_signals_history: List[Dict[str, float]] = []
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        hidden_states: torch.Tensor,
+        control_signals: Optional[Dict[str, Any]] = None,
+        task_bias: Optional[torch.Tensor] = None
+    ) -> Dict[str, Any]:
+        """
+        L1 适配器前向传播
+
+        Args:
+            input_ids: [batch, seq_len] 输入 token IDs
+            hidden_states: [batch, seq_len, embed_dim] 隐藏状态
+            control_signals: 来自 L3 的调控信号
+            task_bias: [batch, task_bias_dim] 任务偏置
+
+        Returns:
+            Dict containing:
+                - output_hidden: 处理后的隐藏状态
+                - attention_weights: 注意力权重
+                - entropy_stats: 熵统计
+                - van_event: 是否触发 VAN 事件
+                - p_harm: 有害概率
+                - control_signals: 调控信号引用
+        """
+        control_signals = control_signals or {}
+
+        batch_size = input_ids.size(0) if input_ids.dim() > 0 else 1
+
+        if task_bias is None:
+            task_bias = torch.zeros(
+                batch_size,
+                self.task_bias_dim,
+                device=hidden_states.device
+            )
+
+        dan_output, dan_attention = self.dan(
+            hidden_states, hidden_states, hidden_states, task_bias
+        )
+
+        van_result = self.van.forward(input_ids, hidden_states)
+        van_event = van_result.van_event
+        p_harm = van_result.p_harm
+
+        van_output = hidden_states * (1 - p_harm)
+
+        tau = control_signals.get("tau", 1.0)
+        theta = control_signals.get("theta", 0.5)
+
+        fused_output = self.fusion(dan_output, van_output, tau=tau, theta=theta)
+
+        alpha = control_signals.get("alpha", 0.1)
+        inhibited_output = self.dmn(fused_output, alpha=alpha)
+
+        prev_hidden = torch.zeros_like(inhibited_output) if self.prev_hidden is None else self.prev_hidden
+        decay_rate = control_signals.get("decay_rate", 0.95)
+        output = self.forget_gate(prev_hidden, inhibited_output, decay_rate=decay_rate)
+
+        self.prev_hidden = output.detach()
+
+        attention_weights = torch.matmul(
+            output, hidden_states.transpose(-2, -1)
+        ) / (self.embed_dim ** 0.5)
+        attention_weights = torch.nn.functional.softmax(attention_weights, dim=-1)
+
+        entropy_stats = self._compute_entropy_stats(attention_weights)
+
+        self.control_signals_history.append({
+            "tau": tau,
+            "theta": theta,
+            "alpha": alpha,
+            "decay_rate": decay_rate,
+            "van_event": van_event,
+            "p_harm": p_harm
+        })
+
+        return {
+            "output_hidden": output,
+            "attention_weights": attention_weights,
+            "entropy_stats": entropy_stats,
+            "van_event": van_event,
+            "p_harm": p_harm,
+            "control_signals": control_signals
+        }
+
+    def _compute_entropy_stats(self, attention_weights: torch.Tensor) -> Dict[str, float]:
+        """计算注意力熵统计"""
+        entropy = -torch.sum(
+            attention_weights * torch.log(attention_weights + 1e-10),
+            dim=-1
+        ).mean().item()
+
+        if len(self.control_signals_history) >= 2:
+            prev_tau = self.control_signals_history[-2].get("tau", 1.0)
+            curr_tau = self.control_signals_history[-1].get("tau", 1.0)
+            tau_change = curr_tau - prev_tau
+        else:
+            tau_change = 0.0
+
+        return {
+            "mean": entropy,
+            "variance": float(np.var([h.get("tau", 1.0) for h in self.control_signals_history])) if len(self.control_signals_history) > 1 else 0.0,
+            "current": entropy,
+            "trend": tau_change
+        }
+
+    def reset(self) -> None:
+        """重置 L1 适配器状态"""
+        self.prev_hidden = None
+        self.control_signals_history.clear()
+
+
+class L1Output:
+    """L1 层输出数据结构（兼容骨架代码）"""
+    def __init__(
+        self,
+        output_hidden: torch.Tensor,
+        attention_weights: torch.Tensor,
+        entropy_stats: Dict[str, float],
+        van_event: bool,
+        p_harm: float,
+        control_signals: Dict[str, Any]
+    ):
+        self.output_hidden = output_hidden
+        self.attention_weights = attention_weights
+        self.entropy_stats = entropy_stats
+        self.van_event = van_event
+        self.p_harm = p_harm
+        self.control_signals = control_signals
+
+
+class L3ControllerAdapter:
+    """
+    L3 元控制器适配器
+
+    将骨架代码的 L3Controller 集成到 Hybrid Architecture
+
+    功能:
+    - 冷却机制增强: 截断后防止立即再次截断
+    - 抖动检测与抑制: 检测截断信号是否反复横跳
+    - 历史记录追踪: 记录决策历史用于分析
+    - 温度和稀疏度动态调节: τ ∈ [0.1, 2.0], θ ∈ [0.5, 0.9]
+
+    数据流:
+    entropy_stats + van_event + p_harm → L3Controller.forward() → ControlSignals
+    """
+
+    def __init__(
+        self,
+        config: Optional[Dict] = None,
+        flicker_window_size: int = 5,
+        flicker_threshold: float = 0.6
+    ):
+        config = config or {}
+
+        self.l3_controller = L3Controller(
+            config=config,
+            flicker_window_size=flicker_window_size,
+            flicker_threshold=flicker_threshold
+        )
+
+        self._last_control_signals: Optional[SkeletonControlSignals] = None
+        self._control_signals_history: List[SkeletonControlSignals] = []
+
+    def forward(
+        self,
+        entropy_stats: Dict[str, float],
+        van_event: bool = False,
+        p_harm: float = 0.0,
+        task_embedding: Optional[torch.Tensor] = None
+    ) -> SkeletonControlSignals:
+        """
+        L3适配器前向传播
+
+        Args:
+            entropy_stats: 来自L2的熵统计字典
+                - mean: μ_H 熵均值
+                - variance: σ_H² 熵方差
+                - trend: k_H 趋势
+                - current: 当前熵值
+            van_event: 是否触发VAN事件
+            p_harm: 有害概率
+            task_embedding: 任务嵌入向量
+
+        Returns:
+            SkeletonControlSignals: 调控信号
+                - tau: 温度 τ ∈ [0.1, 2.0]
+                - theta: 稀疏阈值 θ ∈ [0.5, 0.9]
+                - alpha: DMN系数 α ∈ [0.0, 1.0]
+                - stability: 稳定性标志
+                - cutoff: 截断信号
+                - reason: 决策原因
+        """
+        control_signals = self.l3_controller.forward(
+            entropy_stats=entropy_stats,
+            van_event=van_event,
+            p_harm=p_harm,
+            task_embedding=task_embedding
+        )
+
+        self._last_control_signals = control_signals
+        self._control_signals_history.append(control_signals)
+
+        if len(self._control_signals_history) > 100:
+            self._control_signals_history.pop(0)
+
+        return control_signals
+
+    def get_control_signals_dict(self, signals: SkeletonControlSignals) -> Dict[str, Any]:
+        """
+        将 ControlSignals 转换为字典格式
+
+        Args:
+            signals: 控制信号
+
+        Returns:
+            包含 tau, theta, alpha, stability, cutoff, reason 的字典
+        """
+        return {
+            "tau": signals.tau,
+            "theta": signals.theta,
+            "alpha": signals.alpha,
+            "stability": signals.stability,
+            "cutoff": signals.cutoff,
+            "reason": signals.reason
+        }
+
+    def get_last_control_signals(self) -> Optional[Dict[str, Any]]:
+        """获取上一次的调控信号字典"""
+        if self._last_control_signals is None:
+            return None
+        return self.get_control_signals_dict(self._last_control_signals)
+
+    def get_temperature(self) -> float:
+        """获取当前温度 τ"""
+        if self._last_control_signals is None:
+            return 0.7
+        return self._last_control_signals.tau
+
+    def get_sparsity_threshold(self) -> float:
+        """获取当前稀疏阈值 θ"""
+        if self._last_control_signals is None:
+            return 0.7
+        return self._last_control_signals.theta
+
+    def get_dmn_coefficient(self) -> float:
+        """获取当前 DMN 系数 α"""
+        if self._last_control_signals is None:
+            return 0.1
+        return self._last_control_signals.alpha
+
+    def should_cutoff(self) -> bool:
+        """判断是否应该截断"""
+        if self._last_control_signals is None:
+            return False
+        return self._last_control_signals.cutoff
+
+    def is_stable(self) -> bool:
+        """判断当前是否稳定"""
+        if self._last_control_signals is None:
+            return True
+        return self._last_control_signals.stability
+
+    def get_cutoff_reason(self) -> Optional[str]:
+        """获取截断原因"""
+        if self._last_control_signals is None:
+            return None
+        return self._last_control_signals.reason
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """
+        获取L3控制器统计信息
+
+        Returns:
+            统计信息字典
+        """
+        stats = self.l3_controller.get_statistics()
+
+        if self._control_signals_history:
+            tau_values = [s.tau for s in self._control_signals_history]
+            theta_values = [s.theta for s in self._control_signals_history]
+            alpha_values = [s.alpha for s in self._control_signals_history]
+
+            stats.update({
+                "tau_mean": float(np.mean(tau_values)),
+                "tau_std": float(np.std(tau_values)),
+                "theta_mean": float(np.mean(theta_values)),
+                "theta_std": float(np.std(theta_values)),
+                "alpha_mean": float(np.mean(alpha_values)),
+                "alpha_std": float(np.std(alpha_values)),
+                "last_tau": tau_values[-1] if tau_values else 0.7,
+                "last_theta": theta_values[-1] if theta_values else 0.7,
+                "last_alpha": alpha_values[-1] if alpha_values else 0.1
+            })
+
+        return stats
+
+    def get_history(self, last_n: Optional[int] = None) -> List[DecisionRecord]:
+        """获取决策历史"""
+        return self.l3_controller.get_history(last_n)
+
+    def reset(self) -> None:
+        """重置L3控制器状态"""
+        self.l3_controller.reset()
+        self._last_control_signals = None
+        self._control_signals_history.clear()
+
+    def reset_cooldown(self) -> None:
+        """重置冷却计数器"""
+        self.l3_controller.reset_cooldown()
 
 
 @dataclass
@@ -40,6 +741,7 @@ class GenerationResult:
     entropy_stats: Dict[str, float]
     van_event: bool
     security_verified: bool
+    control_signals: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -539,7 +1241,15 @@ class HybridEnlightenLM:
         local_model_name: str = "distilgpt2",
         api_client=None,
         config: Optional[Union[Dict, Any]] = None,
-        use_bayesian_l3: bool = False
+        use_bayesian_l3: bool = False,
+        use_l3_controller: bool = False,
+        l3_config: Optional[Dict] = None,
+        use_l1_adapter: bool = False,
+        l1_config: Optional[Dict] = None,
+        use_skeleton_l2: bool = False,
+        l2_config: Optional[Dict] = None,
+        use_contextual_temperature: bool = False,
+        temperature_config: Optional[TemperatureConfig] = None
     ):
         if config is None:
             config_dict = {}
@@ -562,8 +1272,9 @@ class HybridEnlightenLM:
         self.local_model_name = local_model_name
         self.api_client = api_client
         self.use_bayesian_l3 = use_bayesian_l3
-        
-        # 如果没有提供 API 客户端，默认使用 Ollama 客户端
+        self.use_l1_adapter = use_l1_adapter
+        self.use_skeleton_l2 = use_skeleton_l2
+
         if not self.use_local_model and self.api_client is None:
             self.api_client = OllamaAPIClient(OllamaConfig(model="qwen2.5:14b"))
 
@@ -574,6 +1285,25 @@ class HybridEnlightenLM:
             attention_size=config_dict.get("attention_size", 32)
         )
 
+        l2_config = l2_config or {}
+        self.l2_adapter = None
+        if self.use_skeleton_l2:
+            l2_embed_dim = l2_config.get("embedding_dim", 768)
+            self.l2_adapter = L2WorkingMemoryAdapter(
+                memory_size=l2_config.get("memory_size", 512),
+                embedding_dim=l2_embed_dim,
+                config={
+                    "update_strategy": l2_config.get("update_strategy", "topk"),
+                    "hierarchical_sizes": l2_config.get("hierarchical_sizes", [64, 256, 512]),
+                    "entropy_window": l2_config.get("entropy_window", 100),
+                    "entropy_compute_interval": l2_config.get("entropy_compute_interval", 1),
+                    "ema_decay": l2_config.get("ema_decay", 0.99),
+                    "eviction_policy": l2_config.get("eviction_policy", "lru"),
+                    "sparse_mode": l2_config.get("sparse_mode", "topk"),
+                    "use_hierarchical": l2_config.get("use_hierarchical", False)
+                }
+            )
+
         self.van_monitor = VANMonitor(
             van_threshold=config_dict.get("van_threshold", 0.7),
             entropy_threshold=config_dict.get("entropy_threshold", 0.3),
@@ -582,13 +1312,50 @@ class HybridEnlightenLM:
             enabled=config_dict.get("van_enabled", True)
         )
 
-        # 初始化贝叶斯L3控制器
         self.bayesian_l3 = None
         if self.use_bayesian_l3:
             self.bayesian_l3 = BayesianL3Controller()
 
+        self.use_l3_controller = use_l3_controller
+        self.l3_controller_adapter = None
+        if self.use_l3_controller:
+            l3_config = l3_config or {}
+            self.l3_controller_adapter = L3ControllerAdapter(
+                config={
+                    "entropy_threshold": l3_config.get("entropy_threshold", 0.5),
+                    "variance_threshold": l3_config.get("variance_threshold", 0.05),
+                    "tau_range": tuple(l3_config.get("tau_range", [0.1, 2.0])),
+                    "theta_range": tuple(l3_config.get("theta_range", [0.5, 0.9])),
+                    "alpha_range": tuple(l3_config.get("alpha_range", [0.0, 1.0])),
+                    "van_priority": l3_config.get("van_priority", True),
+                    "cutoff_cooldown": l3_config.get("cutoff_cooldown", 10)
+                },
+                flicker_window_size=l3_config.get("flicker_window_size", 5),
+                flicker_threshold=l3_config.get("flicker_threshold", 0.6)
+            )
+
+        self.l1_adapter = None
+        if self.use_l1_adapter:
+            l1_config = l1_config or {}
+            self.l1_adapter = L1Adapter(
+                embed_dim=l1_config.get("embed_dim", 768),
+                num_heads=l1_config.get("num_heads", 12),
+                task_bias_dim=l1_config.get("task_bias_dim", 128),
+                van_level=l1_config.get("van_level", "medium"),
+                sensitive_keywords=l1_config.get("sensitive_keywords", None),
+                memory_size=l1_config.get("memory_size", 512)
+            )
+
         self.local_model = None
         self.local_tokenizer = None
+
+        self.use_contextual_temperature = use_contextual_temperature
+        self.contextual_temperature_controller = None
+        if self.use_contextual_temperature:
+            self.contextual_temperature_controller = ContextualTemperatureController(
+                config=temperature_config,
+                tau_range=(0.1, 2.0)
+            )
 
         if self.use_local_model:
             self._load_local_model()
@@ -656,8 +1423,19 @@ class HybridEnlightenLM:
 
         context = self.working_memory.get_context()
 
+        contextual_temp = temperature
+        if self.use_contextual_temperature and self.contextual_temperature_controller is not None:
+            detected_scene = self.contextual_temperature_controller.detect_scene(prompt, context)
+            contextual_entropy_stats = self.working_memory.compute_entropy_stats()
+            contextual_temp = self.contextual_temperature_controller.get_temperature_for_api(
+                entropy_stats=contextual_entropy_stats,
+                van_event=False,
+                p_harm=0.0,
+                scene_type=detected_scene
+            )
+
         if self.use_local_model:
-            output_text, tokens = self._generate_local(context, max_length, temperature)
+            output_text, tokens = self._generate_local(context, max_length, contextual_temp)
         else:
             output_text, tokens = self._generate_api(context, max_length)
 
@@ -665,57 +1443,131 @@ class HybridEnlightenLM:
 
         entropy_stats = self.working_memory.compute_entropy_stats()
 
-        # 使用贝叶斯L3控制器进行决策
-        if self.use_bayesian_l3 and self.bayesian_l3:
-            # 检查VAN事件
-            van_event, van_reason, van_risk = self.van_monitor.check_output(output_text, entropy_stats)
-            
-            # 获取贝叶斯L3控制器的决策
-            control_signals = self.bayesian_l3.forward(
-                entropy_stats=entropy_stats,
-                van_event=van_event,
-                p_harm=van_risk
+        control_signals_dict = None
+        if self.use_l3_controller and self.l3_controller_adapter is not None:
+            van_event_flag = False
+            p_harm_value = 0.0
+
+            if self.use_l1_adapter and self.l1_adapter is not None:
+                l1_result = self._process_with_l1_adapter(output_text, entropy_stats)
+                if l1_result.get("van_event", False):
+                    return GenerationResult(
+                        text="[内容被L1 VAN监控系统截断 - VAN event detected]",
+                        tokens=tokens,
+                        latency=time.time() - start_time,
+                        cutoff=True,
+                        cutoff_reason="L1 VAN event",
+                        entropy_stats=l1_result.get("entropy_stats", entropy_stats),
+                        van_event=True,
+                        security_verified=False
+                    )
+                van_event_flag = l1_result.get("van_event", False)
+                p_harm_value = l1_result.get("p_harm", 0.0)
+                current_entropy_stats = l1_result.get("entropy_stats", entropy_stats)
+            else:
+                van_event_flag, _, van_risk = self.van_monitor.check_output(output_text, entropy_stats)
+                p_harm_value = van_risk
+                current_entropy_stats = entropy_stats
+
+            l3_control_signals = self.l3_controller_adapter.forward(
+                entropy_stats=current_entropy_stats,
+                van_event=van_event_flag,
+                p_harm=p_harm_value
             )
-            
-            if control_signals.cutoff:
+            control_signals_dict = self.l3_controller_adapter.get_control_signals_dict(l3_control_signals)
+
+            if l3_control_signals.cutoff:
                 return GenerationResult(
-                    text="[内容被贝叶斯L3监控系统截断 - " + (control_signals.reason or "高风险内容") + "]",
+                    text="[内容被L3元控制器截断 - " + (l3_control_signals.reason or "高风险内容") + "]",
                     tokens=tokens,
                     latency=time.time() - start_time,
                     cutoff=True,
-                    cutoff_reason=control_signals.reason,
+                    cutoff_reason=l3_control_signals.reason,
+                    entropy_stats=current_entropy_stats,
+                    van_event=van_event_flag,
+                    security_verified=False
+                )
+
+        if self.use_l1_adapter and self.l1_adapter is not None:
+            l1_result = self._process_with_l1_adapter(output_text, entropy_stats)
+            if l1_result.get("van_event", False):
+                return GenerationResult(
+                    text="[内容被L1 VAN监控系统截断 - VAN event detected]",
+                    tokens=tokens,
+                    latency=time.time() - start_time,
+                    cutoff=True,
+                    cutoff_reason="L1 VAN event",
+                    entropy_stats=l1_result.get("entropy_stats", entropy_stats),
+                    van_event=True,
+                    security_verified=False
+                )
+
+            if self.use_bayesian_l3 and self.bayesian_l3:
+                control_signals = self.bayesian_l3.forward(
+                    entropy_stats=l1_result.get("entropy_stats", entropy_stats),
+                    van_event=l1_result.get("van_event", False),
+                    p_harm=l1_result.get("p_harm", 0.0)
+                )
+
+                if control_signals.cutoff:
+                    return GenerationResult(
+                        text="[内容被贝叶斯L3监控系统截断 - " + (control_signals.reason or "高风险内容") + "]",
+                        tokens=tokens,
+                        latency=time.time() - start_time,
+                        cutoff=True,
+                        cutoff_reason=control_signals.reason,
+                        entropy_stats=l1_result.get("entropy_stats", entropy_stats),
+                        van_event=l1_result.get("van_event", False),
+                        security_verified=False
+                    )
+        elif not self.use_l3_controller:
+            if self.use_bayesian_l3 and self.bayesian_l3:
+                van_event, van_reason, van_risk = self.van_monitor.check_output(output_text, entropy_stats)
+
+                control_signals = self.bayesian_l3.forward(
                     entropy_stats=entropy_stats,
                     van_event=van_event,
-                    security_verified=False
-                )
-        else:
-            # 使用传统VAN监控
-            should_cutoff, cutoff_reason, output_risk = self.van_monitor.check_output(output_text, entropy_stats)
-
-            if should_cutoff:
-                return GenerationResult(
-                    text="[内容被VAN监控系统截断 - " + cutoff_reason + "]",
-                    tokens=tokens,
-                    latency=time.time() - start_time,
-                    cutoff=True,
-                    cutoff_reason=cutoff_reason,
-                    entropy_stats=entropy_stats,
-                    van_event=True,
-                    security_verified=False
+                    p_harm=van_risk
                 )
 
-            entropy_cutoff, entropy_reason = self.van_monitor.should_cutoff_by_entropy(entropy_stats)
-            if entropy_cutoff:
-                return GenerationResult(
-                    text="[内容因熵值异常被截断 - " + entropy_reason + "]",
-                    tokens=tokens,
-                    latency=time.time() - start_time,
-                    cutoff=True,
-                    cutoff_reason=entropy_reason,
-                    entropy_stats=entropy_stats,
-                    van_event=True,
-                    security_verified=False
-                )
+                if control_signals.cutoff:
+                    return GenerationResult(
+                        text="[内容被贝叶斯L3监控系统截断 - " + (control_signals.reason or "高风险内容") + "]",
+                        tokens=tokens,
+                        latency=time.time() - start_time,
+                        cutoff=True,
+                        cutoff_reason=control_signals.reason,
+                        entropy_stats=entropy_stats,
+                        van_event=van_event,
+                        security_verified=False
+                    )
+            else:
+                should_cutoff, cutoff_reason, output_risk = self.van_monitor.check_output(output_text, entropy_stats)
+
+                if should_cutoff:
+                    return GenerationResult(
+                        text="[内容被VAN监控系统截断 - " + cutoff_reason + "]",
+                        tokens=tokens,
+                        latency=time.time() - start_time,
+                        cutoff=True,
+                        cutoff_reason=cutoff_reason,
+                        entropy_stats=entropy_stats,
+                        van_event=True,
+                        security_verified=False
+                    )
+
+                entropy_cutoff, entropy_reason = self.van_monitor.should_cutoff_by_entropy(entropy_stats)
+                if entropy_cutoff:
+                    return GenerationResult(
+                        text="[内容因熵值异常被截断 - " + entropy_reason + "]",
+                        tokens=tokens,
+                        latency=time.time() - start_time,
+                        cutoff=True,
+                        cutoff_reason=entropy_reason,
+                        entropy_stats=entropy_stats,
+                        van_event=True,
+                        security_verified=False
+                    )
 
         if enable_trace and trace_callback is not None:
             signals = self.get_l3_trace_signals()
@@ -726,15 +1578,22 @@ class HybridEnlightenLM:
                 p_harm_raw=signals["p_harm_raw"]
             )
 
+        final_entropy_stats = entropy_stats
+        if self.use_l1_adapter and self.l1_adapter is not None:
+            final_entropy_stats = self.working_memory.compute_entropy_stats()
+        elif self.use_l3_controller and self.l3_controller_adapter is not None:
+            final_entropy_stats = self.working_memory.compute_entropy_stats()
+
         return GenerationResult(
             text=output_text,
             tokens=tokens,
             latency=time.time() - start_time,
             cutoff=False,
             cutoff_reason=None,
-            entropy_stats=entropy_stats,
+            entropy_stats=final_entropy_stats,
             van_event=False,
-            security_verified=True
+            security_verified=True,
+            control_signals=control_signals_dict if self.use_l3_controller else None
         )
 
     def _generate_local(
@@ -910,12 +1769,119 @@ class HybridEnlightenLM:
         self.van_monitor.reset()
         if self.bayesian_l3:
             self.bayesian_l3.reset()
+        if self.l1_adapter:
+            self.l1_adapter.reset()
+        if self.l2_adapter:
+            self.l2_adapter.reset()
+        if self.l3_controller_adapter:
+            self.l3_controller_adapter.reset()
+        if self.contextual_temperature_controller:
+            self.contextual_temperature_controller.reset()
+
+    def _process_with_l1_adapter(
+        self,
+        output_text: str,
+        entropy_stats: Dict[str, float]
+    ) -> Dict[str, Any]:
+        """
+        使用 L1 适配器处理输出
+
+        当 use_skeleton_l2=True 时，L1 输出会传递给 L2 适配器进行进一步处理
+
+        Args:
+            output_text: 生成的文本
+            entropy_stats: 当前熵统计
+
+        Returns:
+            Dict containing van_event, p_harm, entropy_stats, etc.
+        """
+        if self.l1_adapter is None:
+            return {
+                "van_event": False,
+                "p_harm": 0.0,
+                "entropy_stats": entropy_stats
+            }
+
+        tokens = output_text.split()
+        if not tokens:
+            return {
+                "van_event": False,
+                "p_harm": 0.0,
+                "entropy_stats": entropy_stats
+            }
+
+        seq_len = min(len(tokens), 32)
+        dummy_hidden = torch.randn(1, seq_len, self.l1_adapter.embed_dim)
+
+        dummy_input_ids = torch.randint(0, 50000, (1, seq_len))
+
+        control_signals = {
+            "tau": 1.0,
+            "theta": 0.5,
+            "alpha": 0.1,
+            "decay_rate": 0.95
+        }
+
+        l1_result = self.l1_adapter(
+            input_ids=dummy_input_ids,
+            hidden_states=dummy_hidden,
+            control_signals=control_signals
+        )
+
+        attention_weights = l1_result["attention_weights"]
+        if isinstance(attention_weights, torch.Tensor):
+            attention_weights = attention_weights.float().cpu().detach().numpy()
+            if attention_weights.ndim > 1:
+                attention_weights = attention_weights.mean(axis=-1)
+            else:
+                attention_weights = np.array([attention_weights.mean()])
+
+        if self.l2_adapter is not None:
+            hidden_states = l1_result["output_hidden"]
+            if hidden_states.dim() == 2:
+                hidden_states = hidden_states.unsqueeze(0)
+
+            l2_result = self.l2_adapter.forward(
+                hidden_states=hidden_states,
+                attention_weights=attention_weights,
+                update_memory=True
+            )
+
+            self.working_memory.update_attention(attention_weights)
+
+            updated_entropy_stats = self.l2_adapter.get_entropy_stats()
+
+            if self.should_l2_cutoff():
+                return {
+                    "van_event": True,
+                    "p_harm": l1_result.get("p_harm", 0.0),
+                    "entropy_stats": updated_entropy_stats,
+                    "l2_cutoff": True
+                }
+
+            return {
+                "van_event": l1_result.get("van_event", False),
+                "p_harm": l1_result.get("p_harm", 0.0),
+                "entropy_stats": updated_entropy_stats,
+                "attention_weights": attention_weights,
+                "l2_result": l2_result
+            }
+        else:
+            self.working_memory.update_attention(attention_weights)
+            updated_entropy_stats = self.working_memory.compute_entropy_stats()
+
+            return {
+                "van_event": l1_result.get("van_event", False),
+                "p_harm": l1_result.get("p_harm", 0.0),
+                "entropy_stats": updated_entropy_stats,
+                "attention_weights": attention_weights
+            }
 
     def get_status(self) -> Dict[str, Any]:
         """获取状态信息"""
         status = {
             "mode": "local" if self.use_local_model else "api",
-            "model": self.local_model_name if self.use_local_model else "deepseek",
+            "model": self.local_model_name if self.use_local_model else "ollama",
             "working_memory_tokens": self.working_memory.token_count,
             "conversation_turns": len(self.working_memory.conversation_history),
             "attention_stats": {
@@ -923,12 +1889,60 @@ class HybridEnlightenLM:
                 "stability": self.working_memory.compute_attention_stats().stability_score
             },
             "van_stats": self.van_monitor.get_statistics(),
-            "use_bayesian_l3": self.use_bayesian_l3
+            "use_bayesian_l3": self.use_bayesian_l3,
+            "use_l1_adapter": self.use_l1_adapter,
+            "use_skeleton_l2": self.use_skeleton_l2,
+            "use_l3_controller": self.use_l3_controller
         }
-        
+
         if self.bayesian_l3:
             status["bayesian_l3_stats"] = self.bayesian_l3.get_statistics()
-        
+
+        if self.l1_adapter:
+            status["l1_adapter"] = {
+                "embed_dim": self.l1_adapter.embed_dim,
+                "num_heads": self.l1_adapter.num_heads,
+                "van_level": self.l1_adapter.van.level if hasattr(self.l1_adapter.van, 'level') else "unknown",
+                "control_signals_count": len(self.l1_adapter.control_signals_history)
+            }
+
+        if self.l2_adapter:
+            l2_entropy_stats = self.l2_adapter.get_entropy_stats()
+            status["l2_adapter"] = {
+                "memory_size": self.l2_adapter.memory_size,
+                "embedding_dim": self.l2_adapter.embedding_dim,
+                "entropy_stats": {
+                    "mean": l2_entropy_stats.get("mean", 0.0),
+                    "variance": l2_entropy_stats.get("variance", 0.0),
+                    "trend": l2_entropy_stats.get("trend", 0.0),
+                    "current": l2_entropy_stats.get("current", 0.0)
+                }
+            }
+
+        if self.l3_controller_adapter:
+            l3_stats = self.l3_controller_adapter.get_statistics()
+            status["l3_controller"] = {
+                "cooldown_counter": l3_stats.get("cooldown_counter", 0),
+                "total_decisions": l3_stats.get("total_decisions", 0),
+                "total_cutoffs": l3_stats.get("total_cutoffs", 0),
+                "last_tau": l3_stats.get("last_tau", 0.7),
+                "last_theta": l3_stats.get("last_theta", 0.7),
+                "last_alpha": l3_stats.get("last_alpha", 0.1)
+            }
+
+        if self.use_contextual_temperature and self.contextual_temperature_controller:
+            temp_stats = self.contextual_temperature_controller.get_statistics()
+            status["contextual_temperature"] = {
+                "enabled": True,
+                "current_scene": temp_stats.get("current_scene", "general"),
+                "current_temperature": temp_stats.get("current_temperature", 0.7),
+                "temperature_stats": temp_stats.get("temperature_stats", {}),
+                "scene_distribution": temp_stats.get("scene_distribution", {}),
+                "stability_stats": temp_stats.get("stability_stats", {})
+            }
+        else:
+            status["contextual_temperature"] = {"enabled": False}
+
         return status
 
     def get_l3_trace_signals(self) -> Dict[str, float]:
@@ -955,3 +1969,185 @@ class HybridEnlightenLM:
             "k_H": entropy_stats["trend"],
             "p_harm_raw": last_risk
         }
+
+    def process_with_l2_adapter(
+        self,
+        hidden_states: torch.Tensor,
+        attention_weights: Optional[torch.Tensor] = None,
+        update_memory: bool = True
+    ) -> L2Result:
+        """
+        使用骨架代码L2适配器处理hidden states
+
+        Args:
+            hidden_states: [batch, seq_len, embed_dim] 隐藏状态
+            attention_weights: [batch, seq_len, seq_len] 注意力权重
+            update_memory: 是否更新记忆
+
+        Returns:
+            L2Result: L2层处理结果
+        """
+        if self.l2_adapter is None:
+            raise RuntimeError("L2 adapter not initialized. Set use_skeleton_l2=True")
+
+        return self.l2_adapter.forward(hidden_states, attention_weights, update_memory)
+
+    def get_l2_entropy_stats(self) -> Dict[str, float]:
+        """
+        获取L2层的熵统计
+
+        如果使用骨架代码L2，返回L2适配器的熵统计
+        否则返回WorkingMemoryManager的熵统计
+
+        Returns:
+            Dict containing mean, variance, trend, current, stability
+        """
+        if self.l2_adapter is not None:
+            return self.l2_adapter.get_entropy_stats()
+        return self.working_memory.compute_entropy_stats()
+
+    def sparse_attention_select(
+        self,
+        attention_weights: torch.Tensor,
+        topk: int = 32
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """
+        使用稀疏注意力选择top-k重要的键值对
+
+        Args:
+            attention_weights: 注意力权重
+            topk: 选择的top-k数量
+
+        Returns:
+            (selected_k, selected_v): 选中的键值对，如果L2适配器未初始化则返回(None, None)
+        """
+        if self.l2_adapter is None:
+            return None, None
+
+        return self.l2_adapter.select_sparse_indices(attention_weights, topk)
+
+    def get_sparse_attention_output(
+        self,
+        query: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        使用稀疏注意力处理query
+
+        Args:
+            query: [batch, seq_len, embed_dim] 查询向量
+            attention_mask: [batch, seq_len] 注意力掩码
+
+        Returns:
+            (output, attention_weights): 稀疏注意力输出和权重
+        """
+        if self.l2_adapter is None:
+            return query, torch.ones_like(query[:, :, :1])
+
+        return self.l2_adapter.get_sparse_attention_output(query, attention_mask)
+
+    def should_l2_cutoff(self) -> bool:
+        """
+        判断L2层是否应该截断
+
+        Returns:
+            bool: 是否应该截断
+        """
+        if self.l2_adapter is None:
+            return False
+
+        return self.l2_adapter.should_cutoff()
+
+    def get_l3_control_signals(self) -> Optional[Dict[str, Any]]:
+        """
+        获取L3控制器的最新调控信号
+
+        Returns:
+            Dict containing tau, theta, alpha, stability, cutoff, reason
+            如果未使用L3控制器则返回None
+        """
+        if self.l3_controller_adapter is None:
+            return None
+        return self.l3_controller_adapter.get_last_control_signals()
+
+    def get_temperature(self) -> float:
+        """
+        获取当前温度值 τ
+
+        Returns:
+            float: 温度值 τ ∈ [0.1, 2.0]
+        """
+        if self.l3_controller_adapter is None:
+            return 0.7
+        return self.l3_controller_adapter.get_temperature()
+
+    def get_sparsity_threshold(self) -> float:
+        """
+        获取当前稀疏度阈值 θ
+
+        Returns:
+            float: 稀疏阈值 θ ∈ [0.5, 0.9]
+        """
+        if self.l3_controller_adapter is None:
+            return 0.7
+        return self.l3_controller_adapter.get_sparsity_threshold()
+
+    def get_dmn_coefficient(self) -> float:
+        """
+        获取当前DMN系数 α
+
+        Returns:
+            float: DMN系数 α ∈ [0.0, 1.0]
+        """
+        if self.l3_controller_adapter is None:
+            return 0.1
+        return self.l3_controller_adapter.get_dmn_coefficient()
+
+    def should_l3_cutoff(self) -> bool:
+        """
+        判断L3层是否应该截断
+
+        Returns:
+            bool: 是否应该截断
+        """
+        if self.l3_controller_adapter is None:
+            return False
+        return self.l3_controller_adapter.should_cutoff()
+
+    def is_l3_stable(self) -> bool:
+        """
+        判断L3层当前是否稳定
+
+        Returns:
+            bool: 是否稳定
+        """
+        if self.l3_controller_adapter is None:
+            return True
+        return self.l3_controller_adapter.is_stable()
+
+    def get_l3_cutoff_reason(self) -> Optional[str]:
+        """
+        获取L3层的截断原因
+
+        Returns:
+            str: 截断原因，如果没有截断则返回None
+        """
+        if self.l3_controller_adapter is None:
+            return None
+        return self.l3_controller_adapter.get_cutoff_reason()
+
+    def get_l3_statistics(self) -> Dict[str, Any]:
+        """
+        获取L3控制器的统计信息
+
+        Returns:
+            Dict containing total_decisions, total_cutoffs, tau/theta/alpha statistics
+        """
+        if self.l3_controller_adapter is None:
+            return {}
+        return self.l3_controller_adapter.get_statistics()
+
+    def reset_l3_cooldown(self) -> None:
+        """重置L3控制器的冷却计数器"""
+        if self.l3_controller_adapter is not None:
+            self.l3_controller_adapter.reset_cooldown()

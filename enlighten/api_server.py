@@ -10,18 +10,29 @@ FastAPI Service - API服务
 """
 
 from dataclasses import dataclass
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Dict, Optional, Any
+from contextlib import asynccontextmanager
 import uvicorn
 import logging
 import uuid
 import os
+import time
+import psutil
 
 from .hybrid_architecture import HybridEnlightenLM, GenerationResult
 from .api.deepseek_client import DeepSeekAPIClient, DeepSeekConfig
 from .config.modes import get_mode_preset, ModeConfig
+from .autoscaler import (
+    Autoscaler,
+    ScalingConfig,
+    ThresholdBasedStrategy,
+    LoadMetrics,
+    ScalingDirection,
+    RequestQueue
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -39,6 +50,10 @@ app.add_middleware(
 _model: Optional[HybridEnlightenLM] = None
 _deepseek_client: Optional[DeepSeekAPIClient] = None
 _config: Optional[ModeConfig] = None
+
+_autoscaler: Optional[Autoscaler] = None
+_request_queue: RequestQueue = RequestQueue(max_size=1000)
+_autoscaler_enabled: bool = False
 
 
 class InferenceRequest(BaseModel):
@@ -96,6 +111,33 @@ class SecurityStats:
     cooldown_active: bool = False
     cooldown_remaining: int = 0
     block_ratio: float = 0.0
+
+
+class AutoscalerConfigRequest(BaseModel):
+    """自动缩放器配置请求"""
+    enabled: bool = Field(..., description="是否启用自动缩放")
+    min_replicas: int = Field(default=1, ge=1, le=100, description="最小副本数")
+    max_replicas: int = Field(default=10, ge=1, le=100, description="最大副本数")
+    cpu_threshold_up: float = Field(default=70.0, ge=0, le=100, description="CPU扩容阈值")
+    cpu_threshold_down: float = Field(default=30.0, ge=0, le=100, description="CPU缩容阈值")
+    memory_threshold_up: float = Field(default=75.0, ge=0, le=100, description="内存扩容阈值")
+    memory_threshold_down: float = Field(default=40.0, ge=0, le=100, description="内存缩容阈值")
+    queue_threshold_up: int = Field(default=10, ge=0, description="队列扩容阈值")
+    queue_threshold_down: int = Field(default=3, ge=0, description="队列缩容阈值")
+    scale_up_cool_down: float = Field(default=60.0, ge=0, description="扩容冷却时间(秒)")
+    scale_down_cool_down: float = Field(default=120.0, ge=0, description="缩容冷却时间(秒)")
+    enable_smooth_scaling: bool = Field(default=True, description="启用平滑缩放")
+
+
+class AutoscalerStatusResponse(BaseModel):
+    """自动缩放器状态响应"""
+    enabled: bool
+    running: bool
+    current_replicas: int
+    target_replicas: int
+    load_metrics: Dict[str, Any]
+    config: Dict[str, Any]
+    recent_actions: list
 
 
 def get_deepseek_client() -> DeepSeekAPIClient:
@@ -159,10 +201,35 @@ def get_model() -> HybridEnlightenLM:
     return _model
 
 
+def init_autoscaler(config: Optional[ScalingConfig] = None):
+    """初始化自动缩放器"""
+    global _autoscaler
+
+    if config is None:
+        config = ScalingConfig()
+
+    def scale_callback(replicas: int):
+        logger.info(f"Autoscaler: scaling to {replicas} replicas")
+
+    _autoscaler = Autoscaler(
+        config=config,
+        strategy=ThresholdBasedStrategy(config),
+        scale_callback=scale_callback
+    )
+
+    logger.info("Autoscaler initialized")
+
+
+def get_autoscaler() -> Optional[Autoscaler]:
+    """获取自动缩放器"""
+    return _autoscaler
+
+
 @app.on_event("startup")
 async def startup_event():
     """启动时初始化"""
     init_model()
+    init_autoscaler()
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -198,7 +265,7 @@ async def health_check():
 
 
 @app.post("/inference", response_model=InferenceResponse)
-async def inference(request: InferenceRequest):
+async def inference(request: InferenceRequest, req: Request):
     """
     推理接口 - 完整的 L1/L2/L3 三层架构
 
@@ -223,12 +290,35 @@ async def inference(request: InferenceRequest):
         InferenceResponse: 推理响应
     """
     try:
+        start_time = time.time()
+        request_id = str(uuid.uuid4())
+
+        if _autoscaler_enabled and _autoscaler:
+            _request_queue.put(request_id)
+            _autoscaler.load_monitor._metrics_history.append(
+                LoadMetrics(
+                    cpu_percent=psutil.cpu_percent(interval=0.01),
+                    memory_percent=psutil.virtual_memory().percent,
+                    request_queue_size=_request_queue.size(),
+                    avg_response_time=0.0,
+                    requests_per_second=0.0,
+                    active_connections=0,
+                    timestamp=time.time()
+                )
+            )
+
         model = get_model()
 
         result: GenerationResult = model.generate(
             prompt=request.text,
             max_length=request.max_length
         )
+
+        response_time = time.time() - start_time
+
+        if _autoscaler_enabled and _autoscaler:
+            _request_queue.get(request_id)
+            _autoscaler.record_request(response_time)
 
         session_id = request.session_id or str(uuid.uuid4())
 
@@ -384,6 +474,151 @@ async def verify_audit_chain():
         "message": f"VAN events: {van_stats['van_events']}, Blocked: {van_stats['blocked_requests']}",
         "details": van_stats
     }
+
+
+@app.post("/autoscaler/config", response_model=dict)
+async def configure_autoscaler(config: AutoscalerConfigRequest):
+    """
+    配置自动缩放器
+
+    配置自动缩放器的参数，可以动态调整缩放策略。
+    """
+    global _autoscaler, _autoscaler_enabled
+
+    try:
+        scaling_config = ScalingConfig(
+            min_replicas=config.min_replicas,
+            max_replicas=config.max_replicas,
+            cpu_threshold_up=config.cpu_threshold_up,
+            cpu_threshold_down=config.cpu_threshold_down,
+            memory_threshold_up=config.memory_threshold_up,
+            memory_threshold_down=config.memory_threshold_down,
+            queue_threshold_up=config.queue_threshold_up,
+            queue_threshold_down=config.queue_threshold_down,
+            scale_up_cool_down=config.scale_up_cool_down,
+            scale_down_cool_down=config.scale_down_cool_down,
+            enable_smooth_scaling=config.enable_smooth_scaling
+        )
+
+        init_autoscaler(scaling_config)
+        _autoscaler_enabled = config.enabled
+
+        if config.enabled and _autoscaler:
+            _autoscaler.start(check_interval=10.0)
+        elif _autoscaler:
+            _autoscaler.stop()
+
+        return {
+            "success": True,
+            "message": f"Autoscaler {'enabled' if config.enabled else 'disabled'}",
+            "config": scaling_config.__dict__
+        }
+
+    except Exception as e:
+        logger.error(f"Autoscaler config error: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@app.get("/autoscaler/status", response_model=AutoscalerStatusResponse)
+async def get_autoscaler_status():
+    """
+    获取自动缩放器状态
+
+    返回当前自动缩放器的运行状态、负载指标和配置信息。
+    """
+    global _autoscaler, _autoscaler_enabled
+
+    if _autoscaler is None:
+        return AutoscalerStatusResponse(
+            enabled=False,
+            running=False,
+            current_replicas=0,
+            target_replicas=0,
+            load_metrics={},
+            config={},
+            recent_actions=[]
+        )
+
+    status = _autoscaler.get_status()
+    load_metrics = _autoscaler.get_load_metrics()
+
+    return AutoscalerStatusResponse(
+        enabled=_autoscaler_enabled,
+        running=status["running"],
+        current_replicas=status["current_replicas"],
+        target_replicas=status["target_replicas"],
+        load_metrics=load_metrics,
+        config=status["config"],
+        recent_actions=status["recent_actions"]
+    )
+
+
+@app.post("/autoscaler/scale")
+async def manual_scale(replicas: int = Field(..., ge=1, le=100, description="目标副本数")):
+    """
+    手动缩放
+
+    手动设置副本数，覆盖自动缩放决策。
+    """
+    global _autoscaler
+
+    if _autoscaler is None:
+        raise HTTPException(status_code=503, detail="Autoscaler not initialized")
+
+    _autoscaler.set_replicas(replicas)
+
+    return {
+        "success": True,
+        "message": f"Scaled to {replicas} replicas",
+        "current_replicas": replicas
+    }
+
+
+@app.post("/autoscaler/start")
+async def start_autoscaler():
+    """启动自动缩放器"""
+    global _autoscaler, _autoscaler_enabled
+
+    if _autoscaler is None:
+        init_autoscaler()
+
+    _autoscaler_enabled = True
+    _autoscaler.start(check_interval=10.0)
+
+    return {
+        "success": True,
+        "message": "Autoscaler started"
+    }
+
+
+@app.post("/autoscaler/stop")
+async def stop_autoscaler():
+    """停止自动缩放器"""
+    global _autoscaler, _autoscaler_enabled
+
+    _autoscaler_enabled = False
+    if _autoscaler:
+        _autoscaler.stop()
+
+    return {
+        "success": True,
+        "message": "Autoscaler stopped"
+    }
+
+
+@app.get("/autoscaler/metrics")
+async def get_autoscaler_metrics():
+    """
+    获取自动缩放器负载指标
+
+    返回当前的负载指标和趋势信息。
+    """
+    global _autoscaler
+
+    if _autoscaler is None:
+        return {"error": "Autoscaler not initialized"}
+
+    return _autoscaler.get_load_metrics()
 
 
 @app.get("/")

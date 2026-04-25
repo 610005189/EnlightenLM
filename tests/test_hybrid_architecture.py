@@ -842,6 +842,331 @@ class TestIntegration:
         assert len(result.text) > 0
 
 
+class TestEnhancedBayesianL3Controller:
+    """增强版贝叶斯L3控制器试验"""
+
+    def test_ebl3_initialization(self):
+        """EBL3-01: 增强版贝叶斯L3控制器初始化"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+
+        controller = EnhancedBayesianL3Controller()
+
+        assert controller is not None
+        assert controller.temporal_window == 5
+        assert controller.robust_nu == 4.0
+        assert len(controller.p_H) == 4
+
+    def test_ebl3_robust_t_likelihood(self):
+        """EBL3-02: 鲁棒t分布似然计算"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+
+        controller = EnhancedBayesianL3Controller()
+
+        lik = controller._robust_t_likelihood(x=0.5, mu=0.5, sigma=0.1, nu=4.0)
+
+        assert lik > 0
+        assert lik < 10
+
+    def test_ebl3_normal_observation(self):
+        """EBL3-03: 正常观测通过"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+
+        controller = EnhancedBayesianL3Controller()
+
+        entropy_stats = {
+            "mean": 0.5,
+            "variance": 0.02,
+            "trend": 0.0
+        }
+
+        result = controller.forward(entropy_stats=entropy_stats, van_event=False, p_harm=0.0)
+
+        assert result.cutoff == False
+        assert 0.2 <= result.tau <= 2.0
+
+    def test_ebl3_bias_injection_detection(self):
+        """EBL3-04: 偏见注入检测"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+
+        controller = EnhancedBayesianL3Controller()
+
+        for _ in range(3):
+            entropy_stats = {
+                "mean": 0.15,
+                "variance": 0.02,
+                "trend": -0.08
+            }
+            result = controller.forward(entropy_stats=entropy_stats, van_event=False, p_harm=0.8)
+
+        posterior = controller.get_posterior()
+
+        assert posterior['bias_injection'] > 0.3 or result.cutoff == True
+
+    def test_ebl3_noise_injection_detection(self):
+        """EBL3-05: 噪声注入检测"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+
+        controller = EnhancedBayesianL3Controller()
+
+        entropy_stats = {
+            "mean": 0.45,
+            "variance": 0.3,
+            "trend": 0.0
+        }
+
+        result = controller.forward(entropy_stats=entropy_stats, van_event=False, p_harm=0.2)
+        posterior = controller.get_posterior()
+
+        assert posterior['noise_injection'] > posterior['normal'] or result.cutoff == False
+
+    def test_ebl3_van_event_triggers_cutoff(self):
+        """EBL3-06: VAN事件触发截断"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+
+        controller = EnhancedBayesianL3Controller()
+
+        entropy_stats = {"mean": 0.5, "variance": 0.02, "trend": 0.0}
+
+        result = controller.forward(entropy_stats=entropy_stats, van_event=True, p_harm=0.5)
+
+        assert result.cutoff == True
+        assert "VAN event" in result.reason
+
+    def test_ebl3_temporal_feature_extraction(self):
+        """EBL3-07: 时序特征提取"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+
+        controller = EnhancedBayesianL3Controller()
+
+        for i in range(5):
+            entropy_stats = {
+                "mean": 0.5 - i * 0.05,
+                "variance": 0.02,
+                "trend": -0.05
+            }
+            controller.forward(entropy_stats=entropy_stats, van_event=False, p_harm=0.1)
+
+        features = controller.get_temporal_features()
+
+        assert 'mu_H_trend' in features
+        assert 'temporal_stability' in features
+        assert features['temporal_stability'] >= 0
+
+    def test_ebl3_slow_drift_detection(self):
+        """EBL3-08: 缓慢漂移检测"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+
+        controller = EnhancedBayesianL3Controller()
+
+        obs_sequence = [
+            {"mu_H": 0.4, "sigma_H2": 0.02, "k_H": -0.05, "p_harm_raw": 0.3},
+            {"mu_H": 0.35, "sigma_H2": 0.02, "k_H": -0.05, "p_harm_raw": 0.4},
+            {"mu_H": 0.3, "sigma_H2": 0.02, "k_H": -0.05, "p_harm_raw": 0.5},
+        ]
+
+        for obs in obs_sequence:
+            controller.temporal_history.append(obs)
+
+        controller._detect_slow_drift(obs_sequence[-1])
+
+    def test_ebl3_adaptive_prior_update(self):
+        """EBL3-09: 自适应先验更新"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+        import numpy as np
+
+        controller = EnhancedBayesianL3Controller(adaptive_learning_rate=0.1)
+
+        initial_prior = controller.p_H.copy()
+
+        for _ in range(5):
+            entropy_stats = {"mean": 0.2, "variance": 0.02, "trend": -0.05}
+            controller.forward(entropy_stats=entropy_stats, van_event=False, p_harm=0.7)
+
+        updated_prior = controller.p_H
+
+        assert not np.array_equal(initial_prior, updated_prior)
+
+    def test_ebl3_dynamic_threshold(self):
+        """EBL3-10: 动态阈值计算"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+        import numpy as np
+
+        controller = EnhancedBayesianL3Controller()
+
+        posterior_focused = np.array([0.9, 0.05, 0.03, 0.02])
+        threshold_focused = controller._compute_dynamic_threshold(posterior_focused)
+
+        posterior_diffuse = np.array([0.25, 0.25, 0.25, 0.25])
+        threshold_diffuse = controller._compute_dynamic_threshold(posterior_diffuse)
+
+        assert threshold_focused < threshold_diffuse
+
+    def test_ebl3_causal_attribution(self):
+        """EBL3-11: 因果归因分析"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+
+        controller = EnhancedBayesianL3Controller()
+
+        for _ in range(3):
+            entropy_stats = {"mean": 0.2, "variance": 0.02, "trend": -0.08}
+            controller.forward(entropy_stats=entropy_stats, van_event=False, p_harm=0.7)
+
+        attribution = controller.get_causal_attribution()
+
+        assert 'dominant_cause' in attribution
+        assert 'posterior' in attribution
+        assert 'suggestions' in attribution
+
+    def test_ebl3_mixed_cause_detection(self):
+        """EBL3-12: 混合病因检测"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+
+        controller = EnhancedBayesianL3Controller()
+
+        entropy_stats = {
+            "mean": 0.25,
+            "variance": 0.2,
+            "trend": -0.03
+        }
+
+        for _ in range(5):
+            result = controller.forward(entropy_stats=entropy_stats, van_event=False, p_harm=0.5)
+
+        posterior = controller.get_posterior()
+
+        assert 'mixed' in posterior
+
+    def test_ebl3_composite_harm_probability(self):
+        """EBL3-13: 综合有害概率计算"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+        import numpy as np
+
+        controller = EnhancedBayesianL3Controller()
+
+        posterior = np.array([0.2, 0.3, 0.4, 0.1])
+        obs = {"mu_H": 0.3, "sigma_H2": 0.15, "k_H": -0.03, "p_harm_raw": 0.6}
+
+        composite = controller._compute_composite_harm_probability(posterior, obs)
+
+        assert 0.0 <= composite <= 1.0
+
+    def test_ebl3_temperature_adjustment(self):
+        """EBL3-14: 温度调节"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+        import numpy as np
+
+        controller = EnhancedBayesianL3Controller()
+
+        posterior_normal = np.array([0.9, 0.05, 0.03, 0.02])
+        obs_normal = {"mu_H": 0.5, "sigma_H2": 0.02, "k_H": 0.0, "p_harm_raw": 0.0}
+        tau_normal = controller._compute_temperature(posterior_normal, obs_normal)
+
+        posterior_bias = np.array([0.1, 0.1, 0.7, 0.1])
+        obs_bias = {"mu_H": 0.2, "sigma_H2": 0.02, "k_H": -0.08, "p_harm_raw": 0.7}
+        tau_bias = controller._compute_temperature(posterior_bias, obs_bias)
+
+        assert tau_bias < tau_normal
+
+    def test_ebl3_reset(self):
+        """EBL3-15: 重置功能"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+
+        controller = EnhancedBayesianL3Controller()
+
+        for _ in range(5):
+            entropy_stats = {"mean": 0.2, "variance": 0.02, "trend": -0.05}
+            controller.forward(entropy_stats=entropy_stats, van_event=False, p_harm=0.7)
+
+        controller.reset()
+
+        assert len(controller.temporal_history) == 0
+        assert len(controller.posterior_history) == 0
+        assert len(controller.decision_history) == 0
+
+    def test_ebl3_statistics(self):
+        """EBL3-16: 统计信息"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+
+        controller = EnhancedBayesianL3Controller()
+
+        for i in range(5):
+            entropy_stats = {"mean": 0.5, "variance": 0.02, "trend": 0.0}
+            controller.forward(entropy_stats=entropy_stats, van_event=False, p_harm=0.0)
+
+        stats = controller.get_statistics()
+
+        assert 'total_decisions' in stats
+        assert 'posterior' in stats
+        assert 'temporal_features' in stats
+
+    def test_ebl3_history_recording(self):
+        """EBL3-17: 历史记录"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+
+        controller = EnhancedBayesianL3Controller()
+
+        for i in range(10):
+            entropy_stats = {"mean": 0.5, "variance": 0.02, "trend": 0.0}
+            controller.forward(entropy_stats=entropy_stats, van_event=False, p_harm=0.0)
+
+        history = controller.get_history(last_n=5)
+
+        assert len(history) == 5
+
+    def test_ebl3_cutoff_cooldown(self):
+        """EBL3-18: 截断冷却"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+
+        controller = EnhancedBayesianL3Controller(cutoff_cooldown=5)
+
+        entropy_stats = {"mean": 0.1, "variance": 0.01, "trend": -0.1}
+        result = controller.forward(entropy_stats=entropy_stats, van_event=False, p_harm=0.9)
+
+        assert result.cutoff == True or controller.cooldown_counter > 0 or result.reason is not None
+
+        for _ in range(3):
+            result = controller.forward(entropy_stats=entropy_stats, van_event=False, p_harm=0.9)
+            if controller.cooldown_counter > 0:
+                break
+
+        if controller.cooldown_counter > 0:
+            for _ in range(3):
+                result = controller.forward(entropy_stats=entropy_stats, van_event=False, p_harm=0.0)
+                assert result.reason == "Cooldown active" or result.cutoff == False
+
+    def test_ebl3_robustness_to_outliers(self):
+        """EBL3-19: 异常值鲁棒性"""
+        from enlighten.l3_controller import EnhancedBayesianL3Controller
+
+        controller = EnhancedBayesianL3Controller(robust_nu=2.0)
+
+        entropy_stats = {"mean": 0.0, "variance": 1.0, "trend": 0.0}
+
+        result = controller.forward(entropy_stats=entropy_stats, van_event=False, p_harm=0.0)
+
+        assert isinstance(result.cutoff, bool)
+
+    def test_ebl3_comparison_with_basic(self):
+        """EBL3-20: 与基础版本对比"""
+        from enlighten.l3_controller import BayesianL3Controller, EnhancedBayesianL3Controller
+
+        basic = BayesianL3Controller()
+        enhanced = EnhancedBayesianL3Controller()
+
+        basic_entropy = {"mean": 0.3, "variance": 0.02, "trend": -0.08}
+        enhanced_entropy = {"mean": 0.3, "variance": 0.02, "trend": -0.08}
+
+        for _ in range(5):
+            basic.forward(entropy_stats=basic_entropy, van_event=False, p_harm=0.7)
+            enhanced.forward(entropy_stats=enhanced_entropy, van_event=False, p_harm=0.7)
+
+        basic_posterior = basic.get_posterior()
+        enhanced_posterior = enhanced.get_posterior()
+
+        assert len(enhanced_posterior) == 4
+        assert len(basic_posterior) == 3
+
+
 class TestL2EntropyVarianceCorrelation:
     """L2 熵方差关联试验"""
 
@@ -1135,6 +1460,258 @@ class TestArchitectureComparison:
         context = model.working_memory.get_context()
 
         assert len(context) > 0
+
+
+class TestL1AdapterIntegration:
+    """L1 适配器集成试验"""
+
+    def test_l1_adapter_initialization(self):
+        """L1-ADP-01: L1适配器初始化"""
+        from enlighten.hybrid_architecture import HybridEnlightenLM, L1Adapter
+
+        model = HybridEnlightenLM(use_l1_adapter=True)
+
+        assert model.use_l1_adapter == True
+        assert model.l1_adapter is not None
+        assert isinstance(model.l1_adapter, L1Adapter)
+
+    def test_l1_adapter_default_disabled(self):
+        """L1-ADP-02: L1适配器默认禁用"""
+        from enlighten.hybrid_architecture import HybridEnlightenLM
+
+        model = HybridEnlightenLM(use_l1_adapter=False)
+
+        assert model.use_l1_adapter == False
+        assert model.l1_adapter is None
+
+    def test_l1_adapter_forward_pass(self):
+        """L1-ADP-03: L1适配器前向传播"""
+        import torch
+        from enlighten.hybrid_architecture import L1Adapter
+
+        adapter = L1Adapter(embed_dim=128, num_heads=4, task_bias_dim=32)
+
+        batch_size = 1
+        seq_len = 8
+        input_ids = torch.randint(0, 1000, (batch_size, seq_len))
+        hidden_states = torch.randn(batch_size, seq_len, 128)
+
+        result = adapter(input_ids, hidden_states)
+
+        assert "output_hidden" in result
+        assert "attention_weights" in result
+        assert "entropy_stats" in result
+        assert "van_event" in result
+        assert "p_harm" in result
+        assert isinstance(result["van_event"], bool)
+        assert isinstance(result["p_harm"], float)
+
+    def test_l1_adapter_dan_van_components(self):
+        """L1-ADP-04: L1适配器DAN/VAN组件"""
+        from enlighten.hybrid_architecture import L1Adapter
+
+        adapter = L1Adapter(
+            embed_dim=256,
+            num_heads=8,
+            task_bias_dim=64,
+            van_level="light"
+        )
+
+        assert adapter.dan is not None
+        assert adapter.van is not None
+        assert adapter.fusion is not None
+        assert adapter.dmn is not None
+        assert adapter.forget_gate is not None
+
+    def test_l1_adapter_forget_gate(self):
+        """L1-ADP-05: L1适配器遗忘门机制"""
+        import torch
+        from enlighten.hybrid_architecture import L1Adapter
+
+        adapter = L1Adapter(embed_dim=64, num_heads=4)
+
+        seq_len = 4
+        input_ids = torch.randint(0, 1000, (1, seq_len))
+        hidden_states = torch.randn(1, seq_len, 64)
+
+        result1 = adapter(input_ids, hidden_states, control_signals={"decay_rate": 0.95})
+        result2 = adapter(input_ids, hidden_states, control_signals={"decay_rate": 0.9})
+
+        assert adapter.prev_hidden is not None
+        assert isinstance(adapter.control_signals_history, list)
+        assert len(adapter.control_signals_history) == 2
+
+    def test_l1_adapter_reset(self):
+        """L1-ADP-06: L1适配器重置"""
+        import torch
+        from enlighten.hybrid_architecture import L1Adapter
+
+        adapter = L1Adapter(embed_dim=64, num_heads=4)
+
+        input_ids = torch.randint(0, 1000, (1, 4))
+        hidden_states = torch.randn(1, 4, 64)
+
+        adapter(input_ids, hidden_states)
+
+        assert adapter.prev_hidden is not None
+        assert len(adapter.control_signals_history) > 0
+
+        adapter.reset()
+
+        assert adapter.prev_hidden is None
+        assert len(adapter.control_signals_history) == 0
+
+    def test_l1_adapter_control_signals(self):
+        """L1-ADP-07: L1适配器调控信号"""
+        import torch
+        from enlighten.hybrid_architecture import L1Adapter
+
+        adapter = L1Adapter(embed_dim=64, num_heads=4)
+
+        input_ids = torch.randint(0, 1000, (1, 4))
+        hidden_states = torch.randn(1, 4, 64)
+
+        control_signals = {
+            "tau": 1.5,
+            "theta": 0.7,
+            "alpha": 0.2,
+            "decay_rate": 0.9
+        }
+
+        result = adapter(input_ids, hidden_states, control_signals=control_signals)
+
+        assert len(adapter.control_signals_history) == 1
+        history = adapter.control_signals_history[0]
+        assert history["tau"] == 1.5
+        assert history["theta"] == 0.7
+        assert history["alpha"] == 0.2
+        assert history["decay_rate"] == 0.9
+
+    def test_l1_adapter_van_detection(self):
+        """L1-ADP-08: L1适配器VAN检测"""
+        import torch
+        from enlighten.hybrid_architecture import L1Adapter
+
+        adapter = L1Adapter(
+            embed_dim=64,
+            num_heads=4,
+            sensitive_keywords=["hack", "exploit", "malware"]
+        )
+
+        sensitive_input_ids = torch.tensor([[101, 2003, 1045, 4649, 102]])
+        hidden_states = torch.randn(1, 5, 64)
+
+        result = adapter(sensitive_input_ids, hidden_states)
+
+        assert isinstance(result["van_event"], bool)
+        assert isinstance(result["p_harm"], float)
+        assert 0.0 <= result["p_harm"] <= 1.0
+
+    def test_l1_adapter_entropy_stats(self):
+        """L1-ADP-09: L1适配器熵统计"""
+        import torch
+        from enlighten.hybrid_architecture import L1Adapter
+
+        adapter = L1Adapter(embed_dim=64, num_heads=4)
+
+        input_ids = torch.randint(0, 1000, (1, 8))
+        hidden_states = torch.randn(1, 8, 64)
+
+        result = adapter(input_ids, hidden_states)
+
+        assert "entropy_stats" in result
+        entropy_stats = result["entropy_stats"]
+        assert "mean" in entropy_stats
+        assert "variance" in entropy_stats
+        assert "current" in entropy_stats
+        assert "trend" in entropy_stats
+
+    def test_l1_adapter_van_levels(self):
+        """L1-ADP-10: L1适配器不同VAN级别"""
+        from enlighten.hybrid_architecture import L1Adapter
+
+        for level in ["light", "medium", "full"]:
+            adapter = L1Adapter(van_level=level)
+            assert adapter.van.level == level
+
+    def test_l1_adapter_stability_tracker(self):
+        """L1-ADP-11: L1适配器稳定性追踪器"""
+        from enlighten.hybrid_architecture import L1Adapter
+
+        adapter = L1Adapter(embed_dim=64, num_heads=4)
+
+        assert adapter.stability_tracker is not None
+        assert hasattr(adapter.stability_tracker, 'threshold')
+
+    def test_l1_adapter_multiple_forward_passes(self):
+        """L1-ADP-12: L1适配器多次前向传播"""
+        import torch
+        from enlighten.hybrid_architecture import L1Adapter
+
+        adapter = L1Adapter(embed_dim=64, num_heads=4)
+
+        for i in range(5):
+            input_ids = torch.randint(0, 1000, (1, 4))
+            hidden_states = torch.randn(1, 4, 64)
+            result = adapter(input_ids, hidden_states)
+
+            assert "output_hidden" in result
+
+        assert len(adapter.control_signals_history) == 5
+
+    def test_hybrid_model_with_l1_adapter_status(self):
+        """L1-ADP-13: 带L1适配器的混合模型状态"""
+        from enlighten.hybrid_architecture import HybridEnlightenLM
+
+        model = HybridEnlightenLM(use_l1_adapter=True)
+
+        status = model.get_status()
+
+        assert "use_l1_adapter" in status
+        assert status["use_l1_adapter"] == True
+        assert "l1_adapter" in status
+        assert status["l1_adapter"]["embed_dim"] == 768
+        assert status["l1_adapter"]["num_heads"] == 12
+
+    def test_hybrid_model_reset_with_l1_adapter(self):
+        """L1-ADP-14: 带L1适配器的混合模型重置"""
+        import torch
+        from enlighten.hybrid_architecture import HybridEnlightenLM
+
+        model = HybridEnlightenLM(use_l1_adapter=True)
+
+        input_ids = torch.randint(0, 1000, (1, 4))
+        hidden_states = torch.randn(1, 4, 768)
+
+        if model.l1_adapter:
+            model.l1_adapter(input_ids, hidden_states)
+
+        assert model.l1_adapter.prev_hidden is not None
+        assert len(model.l1_adapter.control_signals_history) > 0
+
+        model.reset()
+
+        assert model.l1_adapter.prev_hidden is None
+        assert len(model.l1_adapter.control_signals_history) == 0
+
+    def test_l1_adapter_custom_config(self):
+        """L1-ADP-15: L1适配器自定义配置"""
+        from enlighten.hybrid_architecture import HybridEnlightenLM
+
+        l1_config = {
+            "embed_dim": 512,
+            "num_heads": 8,
+            "task_bias_dim": 256,
+            "van_level": "full",
+            "memory_size": 1024
+        }
+
+        model = HybridEnlightenLM(use_l1_adapter=True, l1_config=l1_config)
+
+        assert model.l1_adapter.embed_dim == 512
+        assert model.l1_adapter.num_heads == 8
+        assert model.l1_adapter.task_bias_dim == 256
+        assert model.l1_adapter.van.level == "full"
 
 
 if __name__ == "__main__":

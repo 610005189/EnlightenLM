@@ -73,7 +73,7 @@ class DANAttention(nn.Module):
         v = v.view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
 
         task_bias = self.task_bias_proj(task_bias)
-        task_bias = task_bias.unsqueeze(1).unsqueeze(-1)
+        task_bias = task_bias.unsqueeze(2).unsqueeze(2)
 
         scores = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim ** 0.5)
 
