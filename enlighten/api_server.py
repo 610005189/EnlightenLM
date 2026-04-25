@@ -28,8 +28,8 @@ from .config.modes import get_mode_preset, ModeConfig
 from .autoscaler import (
     Autoscaler,
     ScalingConfig,
-    ThresholdBasedStrategy,
     LoadMetrics,
+    ThresholdBasedStrategy,
     ScalingDirection,
     RequestQueue
 )
@@ -214,7 +214,8 @@ def init_autoscaler(config: Optional[ScalingConfig] = None):
     _autoscaler = Autoscaler(
         config=config,
         strategy=ThresholdBasedStrategy(config),
-        scale_callback=scale_callback
+        scale_callback=scale_callback,
+        queue=_request_queue
     )
 
     logger.info("Autoscaler initialized")
@@ -295,17 +296,16 @@ async def inference(request: InferenceRequest, req: Request):
 
         if _autoscaler_enabled and _autoscaler:
             _request_queue.put(request_id)
-            _autoscaler.load_monitor._metrics_history.append(
-                LoadMetrics(
-                    cpu_percent=psutil.cpu_percent(interval=0.01),
-                    memory_percent=psutil.virtual_memory().percent,
-                    request_queue_size=_request_queue.size(),
-                    avg_response_time=0.0,
-                    requests_per_second=0.0,
-                    active_connections=0,
-                    timestamp=time.time()
-                )
+            metrics = LoadMetrics(
+                cpu_percent=psutil.cpu_percent(interval=0.01),
+                memory_percent=psutil.virtual_memory().percent,
+                request_queue_size=_request_queue.size(),
+                avg_response_time=0.0,
+                requests_per_second=0.0,
+                active_connections=0,
+                timestamp=time.time()
             )
+            _autoscaler.record_load_metrics(metrics)
 
         model = get_model()
 

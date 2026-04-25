@@ -107,10 +107,12 @@ class LoadMonitor:
     def __init__(
         self,
         window_size: int = 60,
-        sample_interval: float = 1.0
+        sample_interval: float = 1.0,
+        queue: Optional[Any] = None
     ):
         self.window_size = window_size
         self.sample_interval = sample_interval
+        self.queue = queue
 
         self._metrics_history: deque = deque(maxlen=window_size)
         self._response_times: deque = deque(maxlen=1000)
@@ -170,6 +172,11 @@ class LoadMonitor:
 
     def _get_queue_size(self) -> int:
         """获取请求队列大小（子类可重写）"""
+        if self.queue and hasattr(self.queue, 'size'):
+            try:
+                return self.queue.size()
+            except Exception:
+                return 0
         return 0
 
     def _get_active_connections(self) -> int:
@@ -204,6 +211,11 @@ class LoadMonitor:
             current_time = time.time()
             self._request_timestamps.append(current_time)
             self._response_times.append(response_time)
+
+    def record_load_metrics(self, metrics: LoadMetrics):
+        """记录完整的负载指标"""
+        with self._lock:
+            self._metrics_history.append(metrics)
 
     def get_current_metrics(self) -> LoadMetrics:
         """获取当前指标"""
@@ -259,9 +271,9 @@ class LoadMonitor:
                     return 0.0
                 return numerator / denominator
 
-            cpu_values = [m.metrics.cpu_percent for m in recent]
-            memory_values = [m.metrics.memory_percent for m in recent]
-            queue_values = [float(m.metrics.request_queue_size) for m in recent]
+            cpu_values = [m.cpu_percent for m in recent]
+            memory_values = [m.memory_percent for m in recent]
+            queue_values = [float(m.request_queue_size) for m in recent]
 
             return {
                 "cpu_trend": compute_trend(cpu_values),
@@ -278,8 +290,8 @@ class LoadMonitor:
                     "samples_collected": 0
                 }
 
-            cpu_values = [m.metrics.cpu_percent for m in self._metrics_history]
-            memory_values = [m.metrics.memory_percent for m in self._metrics_history]
+            cpu_values = [m.cpu_percent for m in self._metrics_history]
+            memory_values = [m.memory_percent for m in self._metrics_history]
 
             return {
                 "total_requests": self._request_count,
@@ -591,13 +603,14 @@ class Autoscaler:
         self,
         config: Optional[ScalingConfig] = None,
         strategy: Optional[ScalingStrategy] = None,
-        scale_callback: Optional[Callable[[int], None]] = None
+        scale_callback: Optional[Callable[[int], None]] = None,
+        queue: Optional[Any] = None
     ):
         self.config = config or ScalingConfig()
         self.strategy = strategy or ThresholdBasedStrategy(self.config)
         self.scale_callback = scale_callback
 
-        self.load_monitor = LoadMonitor()
+        self.load_monitor = LoadMonitor(queue=queue)
         self.smooth_controller = SmoothScalingController(self.config)
 
         self._current_replicas: int = self.config.min_replicas
@@ -695,6 +708,10 @@ class Autoscaler:
     def record_request(self, response_time: float):
         """记录请求以更新指标"""
         self.load_monitor.record_request(response_time)
+
+    def record_load_metrics(self, metrics: LoadMetrics):
+        """记录完整的负载指标"""
+        self.load_monitor.record_load_metrics(metrics)
 
     def set_replicas(self, replicas: int):
         """手动设置副本数"""

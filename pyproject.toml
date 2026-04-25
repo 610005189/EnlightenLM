@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "enlightenlm"
-version = "2.3.0"
+version = "2.5.0"
 description = "从'静态护栏'到'动态觉悟'——基于认知神经科学的大模型安全推理与元认知框架"
 readme = "README.md"
 requires-python = ">=3.8"
