@@ -2095,10 +2095,45 @@
             };
         }
 
-        // 初始加载L3数据
+        // WebSocket连接管理
+        let ws;
+        let wsReconnectInterval;
+
+        function connectWebSocket() {
+            const wsUrl = `ws://${window.location.host}/ws/l3/stats`;
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = function() {
+                console.log('WebSocket连接已建立');
+                addSystemLog('L3 实时监测已连接');
+            };
+
+            ws.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    updateL3Metrics(data);
+                } catch (error) {
+                    console.error('WebSocket消息解析错误:', error);
+                }
+            };
+
+            ws.onerror = function(error) {
+                console.error('WebSocket错误:', error);
+                addSystemLog('L3 实时监测连接错误');
+            };
+
+            ws.onclose = function() {
+                console.log('WebSocket连接已关闭');
+                addSystemLog('L3 实时监测连接已断开');
+                // 尝试重连
+                clearInterval(wsReconnectInterval);
+                wsReconnectInterval = setInterval(connectWebSocket, 5000);
+            };
+        }
+
+        // 初始加载L3数据并建立WebSocket连接
         fetchL3Stats();
-
-
+        connectWebSocket();
 
         document.addEventListener('click', function(event) {
             const dropdown = document.getElementById('settingsDropdown');

@@ -279,6 +279,8 @@ class SimplifiedL2Adapter(nn.Module):
             L2Result: 包含稀疏KV、熵统计和记忆快照
         """
         if attention_weights is not None:
+            if isinstance(attention_weights, torch.Tensor):
+                attention_weights = attention_weights.detach()
             self.entropy_tracker.update(attention_weights)
 
         importance = torch.norm(hidden_states, dim=-1).mean(dim=0)
@@ -1830,11 +1832,11 @@ class HybridEnlightenLM:
 
         attention_weights = l1_result["attention_weights"]
         if isinstance(attention_weights, torch.Tensor):
-            attention_weights = attention_weights.float().cpu().detach().numpy()
+            attention_weights = attention_weights.float()
             if attention_weights.ndim > 1:
-                attention_weights = attention_weights.mean(axis=-1)
+                attention_weights = attention_weights.mean(dim=-1)
             else:
-                attention_weights = np.array([attention_weights.mean()])
+                attention_weights = attention_weights.mean().unsqueeze(0)
 
         if self.l2_adapter is not None:
             hidden_states = l1_result["output_hidden"]
@@ -1867,7 +1869,7 @@ class HybridEnlightenLM:
                 "l2_result": l2_result
             }
         else:
-            self.working_memory.update_attention(attention_weights)
+            self.working_memory.update_attention(attention_weights.detach() if isinstance(attention_weights, torch.Tensor) else attention_weights)
             updated_entropy_stats = self.working_memory.compute_entropy_stats()
 
             return {
