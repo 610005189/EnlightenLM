@@ -1,8 +1,8 @@
 # EnlightenLM · 觉悟三层架构
 
 > 从"静态护栏"到"动态觉悟"——基于认知神经科学的大模型安全推理与元认知框架
-> **版本**：v2.3（API模式简化实现）
-> **状态**：⚠️ 设计愿景 v2.2 / ✅ 实际运行简化版
+> **版本**：v2.4（本地模型集成完成）
+> **状态**：⚠️ 设计愿景 v2.2 / ✅ 本地模型集成版
 
 > **重要说明**：
 > - `docs/architecture.md` 描述的是**完整设计架构**（v2.2愿景）
@@ -10,7 +10,8 @@
 > - 详见 [实现状态总览](./docs/implementation_status.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Status: API Mode](https://img.shields.io/badge/Status-API%20Mode-blue)]()
+[![Status: Local Model](https://img.shields.io/badge/Status-Local%20Model-green)]()
+[![Ollama Compatible](https://img.shields.io/badge/Ollama-Qwen2.5:14b-Compatible-green)]()
 [![DeepSeek Compatible](https://img.shields.io/badge/DeepSeek-V3%20%7C%20V4-Compatible-blue)]()
 [![CI](https://github.com/610005189/enlightenlm/actions/workflows/ci.yml/badge.svg)](https://github.com/610005189/enlightenlm/actions)
 [![PyPI version](https://img.shields.io/pypi/v/enlightenlm.svg)](https://pypi.org/project/enlightenlm/)
@@ -522,10 +523,7 @@ L2-L3：VAN 敏感 token (16K)     → 永不淘汰
 │   └── benchmark/                  # 性能基准
 │       └── test_performance.py
 │
-├── EnlightenLM_Quick_Test/          # 快速测试
-│   ├── EnlightenLM_Quick_Test_1.md
-│   └── Experiment_Results.md
-│
+
 └── logs/                            # 日志
     ├── security_test_results.json  # 安全测试结果
     └── audit/                      # 审计日志
