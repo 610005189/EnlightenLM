@@ -2,10 +2,10 @@
 
 > 从"静态护栏"到"动态觉悟"——基于认知神经科学的大模型安全推理与元认知框架
 > **版本**：v2.5（全功能完成）
-> **状态**：✅ 设计愿景 v2.2 / ✅ 全功能完成版
+> **状态**：✅ 设计愿景 v2.5 / ✅ 全功能完成版
 
 > **重要说明**：
-> - `docs/architecture.md` 描述的是**完整设计架构**（v2.2愿景）
+> - `docs/architecture.md` 描述的是**完整设计架构**（v2.5愿景）
 > - `enlighten/hybrid_architecture.py` 是**当前实际运行的代码**
 > - 详见 [实现状态总览](./docs/implementation_status.md)
 
@@ -14,8 +14,6 @@
 [![Ollama Compatible](https://img.shields.io/badge/Ollama-Qwen2.5:14b-Compatible-green)]()
 [![DeepSeek Compatible](https://img.shields.io/badge/DeepSeek-V3%20%7C%20V4-Compatible-blue)]()
 [![CI](https://github.com/610005189/enlightenlm/actions/workflows/ci.yml/badge.svg)](https://github.com/610005189/enlightenlm/actions)
-[![PyPI version](https://img.shields.io/pypi/v/enlightenlm.svg)](https://pypi.org/project/enlightenlm/)
-[![Python versions](https://img.shields.io/pypi/pyversions/enlightenlm.svg)](https://pypi.org/project/enlightenlm/)
 
 ---
 
@@ -39,7 +37,7 @@
 
 **EnlightenLM** 将大模型推理过程解耦为三层，并借鉴人脑注意力网络（DAN/VAN/DMN）实现实时自我监控与安全截断：
 
-> ⚠️ **以下为设计愿景（v2.2文档描述）**：
+> ⚠️ **以下为设计愿景（v2.5文档描述）**：
 > - **L1 生成层**：双流注意力（DAN 目标驱动 + VAN 刺激驱动） + 遗忘门
 > - **L2 工作记忆层**：压缩上下文，维护活跃 token 集、实时熵统计
 > - **L3 元控制层**：实时调控温度/稀疏度/截断，写入密码学审计链
@@ -86,7 +84,7 @@ L3 贝叶斯控制器: 病因推断 + 动态温度调节 + 连续截断信心
 
 ---
 
-### ⚠️ 设计架构（详见 docs/architecture.md）
+### ⚠️ 设计架构（详见 docs/architecture.md v2.5）
 
 ```
 用户输入
