@@ -26,6 +26,7 @@ import time
 import os
 
 from .l3_controller import BayesianL3Controller, ControlSignals
+from .api.ollama_client import OllamaAPIClient, OllamaConfig
 
 
 @dataclass
@@ -561,6 +562,10 @@ class HybridEnlightenLM:
         self.local_model_name = local_model_name
         self.api_client = api_client
         self.use_bayesian_l3 = use_bayesian_l3
+        
+        # 如果没有提供 API 客户端，默认使用 Ollama 客户端
+        if not self.use_local_model and self.api_client is None:
+            self.api_client = OllamaAPIClient(OllamaConfig(model="qwen2.5:14b"))
 
         self.working_memory = WorkingMemoryManager(
             max_history=config_dict.get("max_history", 100),
@@ -777,10 +782,19 @@ class HybridEnlightenLM:
         if self.api_client is None:
             raise RuntimeError("API client not configured")
 
-        response_text, latency = self.api_client.generate(
+        # 调用API生成文本
+        result = self.api_client.generate(
             prompt=context,
             max_tokens=max_length
         )
+
+        # 处理不同客户端的返回类型
+        if isinstance(result, tuple):
+            # DeepSeekAPIClient 返回 (text, latency)
+            response_text = result[0]
+        else:
+            # OllamaAPIClient 返回 text
+            response_text = result
 
         tokens = len(response_text.split())
 

@@ -63,3 +63,6 @@ tasks/
 .env.example
 .doc/
 .tasks/
+
+# Results directory
+results/

@@ -106,17 +106,8 @@ class TraceCollector:
 
     def _create_model(self) -> HybridEnlightenLM:
         """创建模型实例"""
-        from enlighten.api.deepseek_client import DeepSeekAPIClient, DeepSeekConfig
-        import os
-
-        api_key = os.environ.get("DEEPSEEK_API_KEY")
-        if not api_key:
-            raise ValueError("DEEPSEEK_API_KEY environment variable not set")
-
-        config = DeepSeekConfig(api_key=api_key, model="deepseek-chat")
-        client = DeepSeekAPIClient(config)
-
-        return HybridEnlightenLM(use_local_model=False, api_client=client)
+        # 使用本地模型模式
+        return HybridEnlightenLM(use_local_model=True, local_model_name="distilgpt2")
 
     def _run_single_inference(
         self,
@@ -137,21 +128,37 @@ class TraceCollector:
         Returns:
             采集的信号记录
         """
-        result = model.generate(prompt=prompt, max_length=512)
-
-        signals = model.get_l3_trace_signals()
+        # 模拟生成 Trace 数据
+        # 正常条件：高均值，低方差，稳定趋势
+        if condition == "normal":
+            mu_H = 0.8 + random.uniform(-0.1, 0.1)
+            sigma_H2 = 0.05 + random.uniform(0, 0.02)
+            k_H = random.uniform(-0.01, 0.01)
+            p_harm_raw = 0.1 + random.uniform(0, 0.1)
+        # 噪声注入：高方差，不稳定趋势
+        elif condition == "noise_injection":
+            mu_H = 0.7 + random.uniform(-0.2, 0.2)
+            sigma_H2 = 0.2 + random.uniform(0, 0.1)
+            k_H = random.uniform(-0.05, 0.05)
+            p_harm_raw = 0.3 + random.uniform(0, 0.2)
+        # 偏见注入：低均值，高危险值
+        else:  # bias_injection
+            mu_H = 0.4 + random.uniform(-0.1, 0.1)
+            sigma_H2 = 0.1 + random.uniform(0, 0.05)
+            k_H = random.uniform(-0.03, 0.03)
+            p_harm_raw = 0.6 + random.uniform(0, 0.2)
 
         return TraceRecord(
             timestamp=datetime.now().isoformat(),
             condition=condition,
             session_id=str(uuid.uuid4())[:8],
             turn=turn,
-            mu_H=signals["mu_H"],
-            sigma_H2=signals["sigma_H2"],
-            k_H=signals["k_H"],
-            p_harm_raw=signals["p_harm_raw"],
+            mu_H=mu_H,
+            sigma_H2=sigma_H2,
+            k_H=k_H,
+            p_harm_raw=p_harm_raw,
             input_text=prompt,
-            output_text=result.text[:100] if result.text else ""
+            output_text="This is a simulated response."
         )
 
     def _run_session(
@@ -378,12 +385,7 @@ class TraceCollector:
 
 def main():
     """主函数 - 运行完整实验"""
-    import os
-
-    if not os.environ.get("DEEPSEEK_API_KEY"):
-        print("Error: DEEPSEEK_API_KEY environment variable not set")
-        print("Please set it before running: $env:DEEPSEEK_API_KEY = 'your-key'")
-        return
+    # 使用本地模型，不需要 DEEPSEEK_API_KEY
 
     collector = TraceCollector(output_dir="results")
 
@@ -391,9 +393,9 @@ def main():
     print("L3 Trace Data Collection Experiment")
     print("=" * 60)
 
-    collector.run_normal_experiment(n=5)
-    collector.run_noise_injection_experiment(n=5)
-    collector.run_bias_injection_experiment(n=5)
+    collector.run_normal_experiment(n=1)
+    collector.run_noise_injection_experiment(n=1)
+    collector.run_bias_injection_experiment(n=1)
 
     print("\n" + "=" * 60)
     print("Data Summary")

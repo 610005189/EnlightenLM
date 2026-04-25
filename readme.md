@@ -44,7 +44,7 @@
 > - **L3 元控制层**：实时调控温度/稀疏度/截断，写入密码学审计链
 
 > ✅ **以下为当前实际实现（hybrid_architecture.py）**：
-> - **L1 生成层**：DeepSeek API 或本地模型（无双流/遗忘门/DMN）
+> - **L1 生成层**：Ollama 本地模型（qwen2.5:14b）或 DeepSeek API（无双流/遗忘门/DMN）
 > - **L2 工作记忆层**：会话历史管理 + 文本熵分析 + 近似注意力统计
 > - **L3 元控制层**：敏感词检测 + 自指循环检测 + 文本熵截断 + 贝叶斯病因推断器（无密码学审计）
 
@@ -61,7 +61,7 @@
 ```
 用户输入
   ↓
-L1生成层: DeepSeek API 或 distilgpt2 本地模型
+L1生成层: Ollama 本地模型（qwen2.5:14b）或 DeepSeek API
   ↓
 L2工作记忆: 会话历史 + 文本熵分析 + 近似注意力统计
   ↓
@@ -73,6 +73,7 @@ L3 贝叶斯控制器: 病因推断 + 动态温度调节 + 连续截断信心
 ```
 
 **实际实现的功能**：
+- ✅ Ollama 本地模型集成（qwen2.5:14b）
 - ✅ DeepSeek API 集成
 - ✅ 会话历史管理
 - ✅ 文本熵值计算（词汇多样性/重复率/字符熵）
@@ -617,10 +618,7 @@ L2-L3：VAN 敏感 token (16K)     → 永不淘汰
 ### 方式一：API 服务器模式（推荐）
 
 ```bash
-# 设置 API Key
-$env:DEEPSEEK_API_KEY = "sk-你的密钥"
-
-# 启动 API 服务器
+# 启动 API 服务器（默认使用 Ollama 本地模型）
 python -m enlighten.api_server
 
 # 启动 Web 界面（另一个终端）
@@ -630,7 +628,18 @@ python -m http.server 8080
 
 访问 http://localhost:8080/chat.html 使用 Web 界面。
 
-### 方式二：直接使用 Python API
+### 方式二：直接使用 Python API（本地模型）
+
+```python
+from enlighten.hybrid_architecture import HybridEnlightenLM
+
+# 默认使用 Ollama 本地模型（qwen2.5:14b）
+model = HybridEnlightenLM(use_local_model=False, use_bayesian_l3=True)
+result = model.generate("请解释量子纠缠", max_length=512)
+print(result.text)
+```
+
+### 方式三：直接使用 Python API（DeepSeek API）
 
 ```python
 from enlighten.hybrid_architecture import HybridEnlightenLM
