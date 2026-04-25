@@ -214,8 +214,277 @@
         .main-content {
             flex: 1;
             display: flex;
-            flex-direction: column;
             background-color: var(--bg-primary);
+        }
+
+        /* Chat Area */
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        /* L3 Monitor Panel */
+        .l3-monitor {
+            width: 320px;
+            background-color: var(--bg-secondary);
+            border-left: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            transition: var(--transition);
+        }
+
+        .l3-monitor.collapsed {
+            width: 0;
+            overflow: hidden;
+        }
+
+        .l3-monitor-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .l3-monitor-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .l3-monitor-toggle {
+            background: transparent;
+            border: none;
+            color: var(--text-tertiary);
+            cursor: pointer;
+            padding: 4px;
+            border-radius: var(--radius-sm);
+            transition: var(--transition);
+        }
+
+        .l3-monitor-toggle:hover {
+            background-color: var(--bg-hover);
+            color: var(--text-primary);
+        }
+
+        .l3-monitor-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        .l3-section {
+            margin-bottom: 24px;
+        }
+
+        .l3-section-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .l3-metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 12px;
+            background-color: var(--bg-tertiary);
+            border-radius: var(--radius-sm);
+            margin-bottom: 8px;
+        }
+
+        .l3-metric-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .l3-metric-value {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .l3-metric-value.high {
+            color: var(--accent-color);
+        }
+
+        .l3-metric-value.medium {
+            color: #f59e0b;
+        }
+
+        .l3-metric-value.low {
+            color: #ef4444;
+        }
+
+        .l3-confidence-bar {
+            width: 100%;
+            height: 8px;
+            background-color: var(--bg-tertiary);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+
+        .l3-confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #ef4444, #f59e0b, var(--accent-color));
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+
+        /* Animation for progress bar */
+        @keyframes progressAnimation {
+            0% { width: 0%; }
+        }
+
+        .l3-confidence-fill.animate {
+            animation: progressAnimation 2s ease-out forwards;
+        }
+
+        /* Improve visualization for entropy distribution */
+        #entropyDistribution {
+            position: relative;
+        }
+
+        #entropyDistribution::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(to top, rgba(0,0,0,0.1), transparent);
+            pointer-events: none;
+            border-radius: 2px;
+        }
+
+        /* Improve visualization for attention heatmap */
+        #attentionHeatmap {
+            position: relative;
+            overflow: hidden;
+        }
+
+        #attentionHeatmap::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(to right, rgba(0,0,0,0.1), transparent, rgba(0,0,0,0.1));
+            pointer-events: none;
+            border-radius: 4px;
+        }
+
+        /* Add hover effects for better user interaction */
+        .l3-metric:hover {
+            background-color: var(--bg-hover);
+            transition: background-color 0.2s ease;
+        }
+
+        .l3-section:hover {
+            background-color: rgba(0,0,0,0.02);
+            border-radius: var(--radius-sm);
+            transition: background-color 0.2s ease;
+        }
+
+        /* Improve content preview styling */
+        #contentPreview {
+            font-family: var(--font-mono);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        /* Add loading animation for better user feedback */
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .loading {
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        .l3-status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px;
+            background-color: var(--bg-tertiary);
+            border-radius: var(--radius-sm);
+            margin-bottom: 16px;
+        }
+
+        .l3-status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--accent-color);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .l3-status-text {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .l3-log {
+            font-size: 12px;
+            color: var(--text-tertiary);
+            background-color: var(--bg-tertiary);
+            border-radius: var(--radius-sm);
+            padding: 12px;
+            max-height: 120px;
+            overflow-y: auto;
+        }
+
+        .l3-log-entry {
+            margin-bottom: 6px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .l3-log-entry:last-child {
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+        }
+
+        .l3-log-time {
+            color: var(--text-tertiary);
+            font-size: 11px;
+            margin-right: 8px;
+        }
+
+        .l3-log-message {
+            color: var(--text-secondary);
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .l3-monitor {
+                position: fixed;
+                right: 0;
+                top: 0;
+                height: 100vh;
+                z-index: 99;
+                box-shadow: -4px 0 12px rgba(0,0,0,0.2);
+            }
+
+            .l3-monitor.collapsed {
+                right: -320px;
+                width: 320px;
+            }
         }
 
         .chat-header {
@@ -902,94 +1171,262 @@
 
         <!-- Main Content -->
         <main class="main-content">
-            <!-- Chat Header -->
-            <header class="chat-header">
-                <button class="header-btn" id="menuBtn" onclick="toggleSidebar()">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="3" y1="12" x2="21" y2="12"></line>
-                        <line x1="3" y1="6" x2="21" y2="6"></line>
-                        <line x1="3" y1="18" x2="21" y2="18"></line>
-                    </svg>
-                </button>
-                <h1 class="chat-header-title" id="chatTitle">新对话</h1>
-                <div class="chat-header-actions">
-                    <button class="header-btn" onclick="clearChat()" title="清除对话">
+            <!-- Chat Area -->
+            <div class="chat-area">
+                <!-- Chat Header -->
+                <header class="chat-header">
+                    <button class="header-btn" id="menuBtn" onclick="toggleSidebar()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="3" y1="12" x2="21" y2="12"></line>
+                            <line x1="3" y1="6" x2="21" y2="6"></line>
+                            <line x1="3" y1="18" x2="21" y2="18"></line>
+                        </svg>
+                    </button>
+                    <h1 class="chat-header-title" id="chatTitle">新对话</h1>
+                    <div class="chat-header-actions">
+                        <button class="header-btn" onclick="toggleL3Monitor()" title="L3监测">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="12" y1="8" x2="12" y2="16"></line>
+                                <line x1="8" y1="12" x2="16" y2="12"></line>
+                            </svg>
+                        </button>
+                        <button class="header-btn" onclick="clearChat()" title="清除对话">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="3 6 5 6 21 6"></polyline>
+                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </header>
+
+                <!-- Messages -->
+                <div class="messages-container" id="messagesContainer">
+                    <!-- Welcome Screen -->
+                    <div class="welcome-screen" id="welcomeScreen">
+                        <div class="welcome-logo">E</div>
+                        <h1 class="welcome-title">我是 EnlightenLM</h1>
+                        <p class="welcome-subtitle">基于认知神经科学的大模型安全推理框架，可以帮助你回答各种问题。</p>
+                        <div class="suggestion-grid">
+                            <div class="suggestion-card" onclick="sendSuggestion('解释量子计算的基本原理')">
+                                <svg class="suggestion-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                                </svg>
+                                <div class="suggestion-title">解释量子计算</div>
+                                <div class="suggestion-desc">了解量子比特和叠加态</div>
+                            </div>
+                            <div class="suggestion-card" onclick="sendSuggestion('帮我写一个Python快速排序算法')">
+                                <svg class="suggestion-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="16 18 22 12 16 6"></polyline>
+                                    <polyline points="8 6 2 12 8 18"></polyline>
+                                </svg>
+                                <div class="suggestion-title">写一个排序算法</div>
+                                <div class="suggestion-desc">Python快速排序实现</div>
+                            </div>
+                            <div class="suggestion-card" onclick="sendSuggestion('用数学方式解释深度学习的工作原理')">
+                                <svg class="suggestion-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="18" y1="20" x2="18" y2="10"></line>
+                                    <line x1="12" y1="20" x2="12" y2="4"></line>
+                                    <line x1="6" y1="20" x2="6" y2="14"></line>
+                                </svg>
+                                <div class="suggestion-title">深度学习原理</div>
+                                <div class="suggestion-desc">神经网络与梯度下降</div>
+                            </div>
+                            <div class="suggestion-card" onclick="sendSuggestion('推荐几本科幻小说的经典之作')">
+                                <svg class="suggestion-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                                </svg>
+                                <div class="suggestion-title">科幻小说推荐</div>
+                                <div class="suggestion-desc">经典之作阅读清单</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Messages will be inserted here -->
+                </div>
+
+                <!-- Input Area -->
+                <div class="input-container">
+                    <div class="input-wrapper">
+                        <textarea
+                            class="input-box"
+                            id="messageInput"
+                            placeholder="输入消息..."
+                            rows="1"
+                            onkeydown="handleKeyDown(event)"
+                            oninput="autoResize(this)"
+                        ></textarea>
+                        <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="22" y1="2" x2="11" y2="13"></line>
+                                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                            </svg>
+                        </button>
+                    </div>
+                    <p class="input-hint">EnlightenLM 会不断学习改进，您的反馈很重要</p>
+                </div>
+            </div>
+
+            <!-- L3 Monitor Panel -->
+            <aside class="l3-monitor" id="l3Monitor">
+                <div class="l3-monitor-header">
+                    <h2 class="l3-monitor-title">L3 实时监测</h2>
+                    <button class="l3-monitor-toggle" onclick="toggleL3Monitor()">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="3 6 5 6 21 6"></polyline>
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
                         </svg>
                     </button>
                 </div>
-            </header>
+                <div class="l3-monitor-content">
+                    <!-- Status Indicator -->
+                    <div class="l3-status-indicator">
+                        <div class="l3-status-dot"></div>
+                        <span class="l3-status-text">L3 监测系统运行中</span>
+                    </div>
 
-            <!-- Messages -->
-            <div class="messages-container" id="messagesContainer">
-                <!-- Welcome Screen -->
-                <div class="welcome-screen" id="welcomeScreen">
-                    <div class="welcome-logo">E</div>
-                    <h1 class="welcome-title">我是 EnlightenLM</h1>
-                    <p class="welcome-subtitle">基于认知神经科学的大模型安全推理框架，可以帮助你回答各种问题。</p>
-                    <div class="suggestion-grid">
-                        <div class="suggestion-card" onclick="sendSuggestion('解释量子计算的基本原理')">
-                            <svg class="suggestion-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <circle cx="12" cy="12" r="10"></circle>
-                                <line x1="12" y1="16" x2="12" y2="12"></line>
-                                <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                            </svg>
-                            <div class="suggestion-title">解释量子计算</div>
-                            <div class="suggestion-desc">了解量子比特和叠加态</div>
+                    <!-- Confidence Metrics -->
+                    <div class="l3-section">
+                        <h3 class="l3-section-title">置信度分析</h3>
+                        <div class="l3-metric">
+                            <span class="l3-metric-label">整体置信度</span>
+                            <span class="l3-metric-value high" id="confidenceOverall">95%</span>
                         </div>
-                        <div class="suggestion-card" onclick="sendSuggestion('帮我写一个Python快速排序算法')">
-                            <svg class="suggestion-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polyline points="16 18 22 12 16 6"></polyline>
-                                <polyline points="8 6 2 12 8 18"></polyline>
-                            </svg>
-                            <div class="suggestion-title">写一个排序算法</div>
-                            <div class="suggestion-desc">Python快速排序实现</div>
+                        <div class="l3-confidence-bar">
+                            <div class="l3-confidence-fill" id="confidenceBar" style="width: 95%"></div>
                         </div>
-                        <div class="suggestion-card" onclick="sendSuggestion('用数学方式解释深度学习的工作原理')">
-                            <svg class="suggestion-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <line x1="18" y1="20" x2="18" y2="10"></line>
-                                <line x1="12" y1="20" x2="12" y2="4"></line>
-                                <line x1="6" y1="20" x2="6" y2="14"></line>
-                            </svg>
-                            <div class="suggestion-title">深度学习原理</div>
-                            <div class="suggestion-desc">神经网络与梯度下降</div>
+
+                        <div class="l3-metric">
+                            <span class="l3-metric-label">熵值</span>
+                            <span class="l3-metric-value medium" id="entropyValue">0.65</span>
                         </div>
-                        <div class="suggestion-card" onclick="sendSuggestion('推荐几本科幻小说的经典之作')">
-                            <svg class="suggestion-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-                                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-                            </svg>
-                            <div class="suggestion-title">科幻小说推荐</div>
-                            <div class="suggestion-desc">经典之作阅读清单</div>
+
+                        <div class="l3-metric">
+                            <span class="l3-metric-label">稳定性</span>
+                            <span class="l3-metric-value high" id="stabilityValue">0.88</span>
+                        </div>
+
+                        <div class="l3-metric">
+                            <span class="l3-metric-label">自指循环检测</span>
+                            <span class="l3-metric-value low" id="selfReferentialValue">0.12</span>
+                        </div>
+                    </div>
+
+                    <!-- Bayesian Analysis -->
+                    <div class="l3-section">
+                        <h3 class="l3-section-title">贝叶斯分析</h3>
+                        <div class="l3-metric">
+                            <span class="l3-metric-label">正常概率</span>
+                            <span class="l3-metric-value high" id="normalProbability">85%</span>
+                        </div>
+                        <div class="l3-metric">
+                            <span class="l3-metric-label">噪声注入</span>
+                            <span class="l3-metric-value low" id="noiseProbability">5%</span>
+                        </div>
+                        <div class="l3-metric">
+                            <span class="l3-metric-label">偏见注入</span>
+                            <span class="l3-metric-value low" id="biasProbability">10%</span>
+                        </div>
+                    </div>
+
+                    <!-- Temperature Control -->
+                    <div class="l3-section">
+                        <h3 class="l3-section-title">温度控制</h3>
+                        <div class="l3-metric">
+                            <span class="l3-metric-label">当前温度</span>
+                            <span class="l3-metric-value medium" id="temperatureValue">0.7</span>
+                        </div>
+                        <div class="l3-metric">
+                            <span class="l3-metric-label">场景类型</span>
+                            <span class="l3-metric-value" id="sceneType">通用</span>
+                        </div>
+                    </div>
+
+                    <!-- Model Output Monitoring -->
+                    <div class="l3-section">
+                        <h3 class="l3-section-title">模型输出监控</h3>
+                        <div class="l3-metric">
+                            <span class="l3-metric-label">生成进度</span>
+                            <span class="l3-metric-value" id="generationProgress">0%</span>
+                        </div>
+                        <div class="l3-confidence-bar">
+                            <div class="l3-confidence-fill" id="progressBar" style="width: 0%"></div>
+                        </div>
+                        <div class="l3-metric">
+                            <span class="l3-metric-label">生成速度</span>
+                            <span class="l3-metric-value" id="generationSpeed">0 tokens/s</span>
+                        </div>
+                        <div class="l3-metric">
+                            <span class="l3-metric-label">已生成</span>
+                            <span class="l3-metric-value" id="tokensGenerated">0 tokens</span>
+                        </div>
+                        <div style="margin-top: 12px; padding: 12px; background-color: var(--bg-tertiary); border-radius: var(--radius-sm);">
+                            <div class="l3-section-title" style="margin-bottom: 8px; font-size: 12px;">内容预览</div>
+                            <div id="contentPreview" style="font-size: 12px; color: var(--text-secondary); line-height: 1.4; max-height: 80px; overflow-y: auto;">正在生成...</div>
+                        </div>
+                    </div>
+
+                    <!-- L2 Layer Analysis -->
+                    <div class="l3-section">
+                        <h3 class="l3-section-title">L2层分析</h3>
+                        <div class="l3-metric">
+                            <span class="l3-metric-label">当前熵值</span>
+                            <span class="l3-metric-value medium" id="l2EntropyValue">0.65</span>
+                        </div>
+                        <div class="l3-metric">
+                            <span class="l3-metric-label">熵值趋势</span>
+                            <span class="l3-metric-value" id="entropyTrend">稳定</span>
+                        </div>
+                        <div style="margin-top: 12px; padding: 12px; background-color: var(--bg-tertiary); border-radius: var(--radius-sm);">
+                            <div class="l3-section-title" style="margin-bottom: 8px; font-size: 12px;">熵值分布</div>
+                            <div id="entropyDistribution" style="display: flex; height: 40px; align-items: flex-end; gap: 2px;">
+                                <!-- Entropy distribution bars will be generated here -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Attention Statistics -->
+                    <div class="l3-section">
+                        <h3 class="l3-section-title">注意力统计</h3>
+                        <div class="l3-metric">
+                            <span class="l3-metric-label">注意力集中度</span>
+                            <span class="l3-metric-value high" id="attentionConcentration">0.85</span>
+                        </div>
+                        <div class="l3-metric">
+                            <span class="l3-metric-label">关注区域</span>
+                            <span class="l3-metric-value" id="attentionArea">全局</span>
+                        </div>
+                        <div style="margin-top: 12px; padding: 12px; background-color: var(--bg-tertiary); border-radius: var(--radius-sm);">
+                            <div class="l3-section-title" style="margin-bottom: 8px; font-size: 12px;">注意力热图</div>
+                            <div id="attentionHeatmap" style="width: 100%; height: 60px; background-color: var(--bg-primary); border-radius: 4px; position: relative;">
+                                <!-- Attention heatmap will be generated here -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- System Logs -->
+                    <div class="l3-section">
+                        <h3 class="l3-section-title">系统日志</h3>
+                        <div class="l3-log" id="systemLog">
+                            <div class="l3-log-entry">
+                                <span class="l3-log-time">14:30:22</span>
+                                <span class="l3-log-message">L3 控制器初始化完成</span>
+                            </div>
+                            <div class="l3-log-entry">
+                                <span class="l3-log-time">14:30:23</span>
+                                <span class="l3-log-message">贝叶斯模型加载成功</span>
+                            </div>
+                            <div class="l3-log-entry">
+                                <span class="l3-log-time">14:30:24</span>
+                                <span class="l3-log-message">温度控制器就绪</span>
+                            </div>
                         </div>
                     </div>
                 </div>
-
-                <!-- Messages will be inserted here -->
-            </div>
-
-            <!-- Input Area -->
-            <div class="input-container">
-                <div class="input-wrapper">
-                    <textarea
-                        class="input-box"
-                        id="messageInput"
-                        placeholder="输入消息..."
-                        rows="1"
-                        onkeydown="handleKeyDown(event)"
-                        oninput="autoResize(this)"
-                    ></textarea>
-                    <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="22" y1="2" x2="11" y2="13"></line>
-                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                        </svg>
-                    </button>
-                </div>
-                <p class="input-hint">EnlightenLM 会不断学习改进，您的反馈很重要</p>
-            </div>
+            </aside>
         </main>
     </div>
 
@@ -1169,6 +1606,8 @@
             sendBtn.disabled = true;
 
             addMessage('user', text);
+            addSystemLog(`用户输入: ${text.substring(0, 30)}${text.length > 30 ? '...' : ''}`);
+            addSystemLog('开始监控模型生成过程');
 
             showTypingIndicator();
 
@@ -1190,11 +1629,15 @@
 
                 const data = await response.json();
                 addMessage('assistant', data.output);
+                addSystemLog('模型生成完成');
+                addSystemLog('更新L3监控数据');
+                fetchL3Stats();
                 saveChatHistory();
 
             } catch (error) {
                 removeTypingIndicator();
                 addMessage('assistant', '抱歉，发生了错误。请确保 API 服务器正在运行。\n\n错误信息：' + error.message);
+                addSystemLog(`错误: ${error.message}`);
             }
         }
 
@@ -1390,6 +1833,272 @@
         }
 
         loadTheme();
+
+        // L3 Monitor Functions
+        function toggleL3Monitor() {
+            const l3Monitor = document.getElementById('l3Monitor');
+            l3Monitor.classList.toggle('collapsed');
+        }
+
+        function addSystemLog(message) {
+            const systemLog = document.getElementById('systemLog');
+            const now = new Date();
+            const timeString = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            
+            const logEntry = document.createElement('div');
+            logEntry.className = 'l3-log-entry';
+            logEntry.innerHTML = `
+                <span class="l3-log-time">${timeString}</span>
+                <span class="l3-log-message">${message}</span>
+            `;
+            
+            systemLog.insertBefore(logEntry, systemLog.firstChild);
+            
+            // 限制日志数量
+            if (systemLog.children.length > 10) {
+                systemLog.removeChild(systemLog.lastChild);
+            }
+        }
+
+        function updateL3Metrics(data) {
+            // 更新置信度指标
+            if (data.confidence !== undefined) {
+                document.getElementById('confidenceOverall').textContent = `${data.confidence}%`;
+                document.getElementById('confidenceBar').style.width = `${data.confidence}%`;
+                
+                const confidenceValue = document.getElementById('confidenceOverall');
+                confidenceValue.className = 'l3-metric-value ' + (data.confidence > 80 ? 'high' : data.confidence > 50 ? 'medium' : 'low');
+            }
+
+            // 更新熵值
+            if (data.entropy !== undefined) {
+                document.getElementById('entropyValue').textContent = data.entropy.toFixed(2);
+                const entropyValue = document.getElementById('entropyValue');
+                entropyValue.className = 'l3-metric-value ' + (data.entropy > 0.7 ? 'high' : data.entropy > 0.4 ? 'medium' : 'low');
+            }
+
+            // 更新稳定性
+            if (data.stability !== undefined) {
+                document.getElementById('stabilityValue').textContent = data.stability.toFixed(2);
+                const stabilityValue = document.getElementById('stabilityValue');
+                stabilityValue.className = 'l3-metric-value ' + (data.stability > 0.8 ? 'high' : data.stability > 0.5 ? 'medium' : 'low');
+            }
+
+            // 更新自指循环检测
+            if (data.selfReferential !== undefined) {
+                document.getElementById('selfReferentialValue').textContent = data.selfReferential.toFixed(2);
+                const selfReferentialValue = document.getElementById('selfReferentialValue');
+                selfReferentialValue.className = 'l3-metric-value ' + (data.selfReferential < 0.2 ? 'low' : data.selfReferential < 0.5 ? 'medium' : 'high');
+            }
+
+            // 更新贝叶斯分析
+            if (data.bayesian !== undefined) {
+                if (data.bayesian.normal !== undefined) {
+                    document.getElementById('normalProbability').textContent = `${Math.round(data.bayesian.normal * 100)}%`;
+                }
+                if (data.bayesian.noise !== undefined) {
+                    document.getElementById('noiseProbability').textContent = `${Math.round(data.bayesian.noise * 100)}%`;
+                }
+                if (data.bayesian.bias !== undefined) {
+                    document.getElementById('biasProbability').textContent = `${Math.round(data.bayesian.bias * 100)}%`;
+                }
+            }
+
+            // 更新温度控制
+            if (data.temperature !== undefined) {
+                document.getElementById('temperatureValue').textContent = data.temperature.toFixed(1);
+                const temperatureValue = document.getElementById('temperatureValue');
+                temperatureValue.className = 'l3-metric-value ' + (data.temperature > 1.0 ? 'high' : data.temperature > 0.5 ? 'medium' : 'low');
+            }
+
+            if (data.sceneType !== undefined) {
+                document.getElementById('sceneType').textContent = data.sceneType;
+            }
+
+            // 更新模型输出监控
+            if (data.generation !== undefined) {
+                if (data.generation.progress !== undefined) {
+                    document.getElementById('generationProgress').textContent = `${Math.round(data.generation.progress)}%`;
+                    document.getElementById('progressBar').style.width = `${data.generation.progress}%`;
+                }
+                if (data.generation.speed !== undefined) {
+                    document.getElementById('generationSpeed').textContent = `${data.generation.speed.toFixed(1)} tokens/s`;
+                }
+                if (data.generation.tokens !== undefined) {
+                    document.getElementById('tokensGenerated').textContent = `${data.generation.tokens} tokens`;
+                }
+                if (data.generation.preview !== undefined) {
+                    document.getElementById('contentPreview').textContent = data.generation.preview;
+                }
+            }
+
+            // 更新L2层分析
+            if (data.l2 !== undefined) {
+                if (data.l2.entropy !== undefined) {
+                    document.getElementById('l2EntropyValue').textContent = data.l2.entropy.toFixed(2);
+                    const l2EntropyValue = document.getElementById('l2EntropyValue');
+                    l2EntropyValue.className = 'l3-metric-value ' + (data.l2.entropy > 0.7 ? 'high' : data.l2.entropy > 0.4 ? 'medium' : 'low');
+                }
+                if (data.l2.entropyTrend !== undefined) {
+                    document.getElementById('entropyTrend').textContent = data.l2.entropyTrend;
+                }
+                if (data.l2.entropyDistribution !== undefined) {
+                    generateEntropyDistribution(data.l2.entropyDistribution);
+                }
+            }
+
+            // 更新注意力统计
+            if (data.attention !== undefined) {
+                if (data.attention.concentration !== undefined) {
+                    document.getElementById('attentionConcentration').textContent = data.attention.concentration.toFixed(2);
+                    const attentionConcentration = document.getElementById('attentionConcentration');
+                    attentionConcentration.className = 'l3-metric-value ' + (data.attention.concentration > 0.8 ? 'high' : data.attention.concentration > 0.5 ? 'medium' : 'low');
+                }
+                if (data.attention.area !== undefined) {
+                    document.getElementById('attentionArea').textContent = data.attention.area;
+                }
+                if (data.attention.heatmap !== undefined) {
+                    generateAttentionHeatmap(data.attention.heatmap);
+                }
+            }
+        }
+
+        function generateEntropyDistribution(distribution) {
+            const container = document.getElementById('entropyDistribution');
+            container.innerHTML = '';
+            
+            distribution.forEach(value => {
+                const bar = document.createElement('div');
+                bar.style.width = '8px';
+                bar.style.height = `${value * 100}%`;
+                bar.style.backgroundColor = getEntropyColor(value);
+                bar.style.borderRadius = '2px';
+                container.appendChild(bar);
+            });
+        }
+
+        function generateAttentionHeatmap(heatmap) {
+            const container = document.getElementById('attentionHeatmap');
+            container.innerHTML = '';
+            
+            heatmap.forEach((value, index) => {
+                const cell = document.createElement('div');
+                cell.style.position = 'absolute';
+                cell.style.left = `${(index / heatmap.length) * 100}%`;
+                cell.style.width = `${100 / heatmap.length}%`;
+                cell.style.height = '100%';
+                cell.style.backgroundColor = getAttentionColor(value);
+                container.appendChild(cell);
+            });
+        }
+
+        function getEntropyColor(value) {
+            if (value > 0.7) return '#ef4444';
+            if (value > 0.4) return '#f59e0b';
+            return '#10b981';
+        }
+
+        function getAttentionColor(value) {
+            if (value > 0.8) return '#ef4444';
+            if (value > 0.6) return '#f59e0b';
+            if (value > 0.4) return '#fbbf24';
+            if (value > 0.2) return '#d97706';
+            return '#10b981';
+        }
+
+        async function fetchL3Stats() {
+            try {
+                const response = await fetch(`${API_BASE}/l3/stats`);
+                if (response.ok) {
+                    const data = await response.json();
+                    updateL3Metrics(data);
+                    addSystemLog('L3 统计信息更新成功');
+                }
+            } catch (error) {
+                console.error('Error fetching L3 stats:', error);
+                // 使用模拟数据
+                updateL3Metrics(getMockL3Data());
+                addSystemLog('使用模拟 L3 数据');
+            }
+        }
+
+        function getMockL3Data() {
+            // 生成随机的生成进度
+            const progress = Math.min(100, Math.random() * 120); // 0-100%
+            
+            // 生成随机的生成速度
+            const speed = Math.random() * 10 + 1; // 1-11 tokens/s
+            
+            // 生成随机的已生成token数
+            const tokens = Math.floor(Math.random() * 500); // 0-500 tokens
+            
+            // 生成随机的内容预览
+            const previews = [
+                "我理解您的问题，让我为您详细解释...",
+                "根据您的需求，我建议采取以下步骤...",
+                "这个问题涉及多个方面，让我逐一分析...",
+                "从技术角度来看，最佳解决方案是...",
+                "根据我的分析，您的问题可能由以下原因引起..."
+            ];
+            const preview = previews[Math.floor(Math.random() * previews.length)];
+            
+            // 生成L2层熵值数据
+            const l2Entropy = Math.random() * 0.5 + 0.3; // 0.3-0.8
+            const entropyTrends = ['上升', '下降', '稳定', '波动'];
+            const entropyTrend = entropyTrends[Math.floor(Math.random() * entropyTrends.length)];
+            
+            // 生成熵值分布
+            const entropyDistribution = [];
+            for (let i = 0; i < 10; i++) {
+                entropyDistribution.push(Math.random() * 0.8 + 0.2); // 0.2-1.0
+            }
+            
+            // 生成注意力数据
+            const attentionConcentration = Math.random() * 0.4 + 0.6; // 0.6-1.0
+            const attentionAreas = ['全局', '局部', '开头', '结尾', '关键词'];
+            const attentionArea = attentionAreas[Math.floor(Math.random() * attentionAreas.length)];
+            
+            // 生成注意力热图数据
+            const attentionHeatmap = [];
+            for (let i = 0; i < 20; i++) {
+                attentionHeatmap.push(Math.random()); // 0-1
+            }
+            
+            return {
+                confidence: Math.random() * 30 + 70, // 70-100%
+                entropy: Math.random() * 0.5 + 0.3, // 0.3-0.8
+                stability: Math.random() * 0.3 + 0.7, // 0.7-1.0
+                selfReferential: Math.random() * 0.3, // 0-0.3
+                bayesian: {
+                    normal: Math.random() * 0.2 + 0.7, // 0.7-0.9
+                    noise: Math.random() * 0.1, // 0-0.1
+                    bias: Math.random() * 0.2 // 0-0.2
+                },
+                temperature: Math.random() * 0.6 + 0.4, // 0.4-1.0
+                sceneType: ['通用', '创意写作', '代码生成', '问答'][Math.floor(Math.random() * 4)],
+                generation: {
+                    progress: progress,
+                    speed: speed,
+                    tokens: tokens,
+                    preview: preview
+                },
+                l2: {
+                    entropy: l2Entropy,
+                    entropyTrend: entropyTrend,
+                    entropyDistribution: entropyDistribution
+                },
+                attention: {
+                    concentration: attentionConcentration,
+                    area: attentionArea,
+                    heatmap: attentionHeatmap
+                }
+            };
+        }
+
+        // 初始加载L3数据
+        fetchL3Stats();
+
+
 
         document.addEventListener('click', function(event) {
             const dropdown = document.getElementById('settingsDropdown');

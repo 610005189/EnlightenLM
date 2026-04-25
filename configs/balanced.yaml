@@ -2,6 +2,12 @@ enlighten:
   mode: "balanced"
   description: "Balanced模式 - 平衡安全性和性能，使用中等VAN检测"
 
+  model_provider:
+    use_local_model: false
+    local_model_name: "qwen2.5:14b"
+    api_provider: "ollama"
+    api_model: "deepseek-chat"
+
   components:
     van_stream:
       level: "medium"  # light | medium | full

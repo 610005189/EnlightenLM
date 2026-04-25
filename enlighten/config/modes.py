@@ -60,10 +60,10 @@ class AsyncReviewConfig:
 class ModelProviderConfig:
     """模型提供者配置"""
     use_local_model: bool = False
-    local_model_name: str = "distilgpt2"
+    local_model_name: str = "qwen2.5:7b"
     local_model_path: Optional[str] = None
-    api_provider: str = "deepseek"
-    api_model: str = "deepseek-chat"
+    api_provider: str = "ollama"
+    api_model: str = "qwen2.5:7b"
     device: str = "auto"
     local_max_length: int = 1024
     local_temperature: float = 0.7
