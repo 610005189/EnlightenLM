@@ -1421,6 +1421,19 @@ class HybridEnlightenLM:
             logger = __import__('logging').getLogger(__name__)
             logger.info("Signal adaptive preprocessor enabled")
 
+        # 初始化幻觉判别器
+        self.use_hallucination_discriminator = config_dict.get("use_hallucination_discriminator", False)
+        self.hallucination_discriminator = None
+        if self.use_hallucination_discriminator:
+            from .memory.hallucination_discriminator import HallucinationDiscriminator, HallucinationDiscriminatorConfig
+            discriminator_config = HallucinationDiscriminatorConfig(
+                model_path=config_dict.get("hallucination_model_path", None),
+                threshold=config_dict.get("hallucination_threshold", 0.7)
+            )
+            self.hallucination_discriminator = HallucinationDiscriminator(discriminator_config)
+            logger = __import__('logging').getLogger(__name__)
+            logger.info("Hallucination discriminator enabled")
+
         if self.use_local_model:
             self._load_local_model()
 
@@ -1503,6 +1516,47 @@ class HybridEnlightenLM:
 
         context = self.working_memory.get_context()
 
+        # 使用幻觉判别器检测幻觉风险
+        hallucination_risk = 0.0
+        is_hallucination = False
+        if self.use_hallucination_discriminator and self.hallucination_discriminator is not None:
+            # 提取特征
+            entropy_stats = self.working_memory.compute_entropy_stats()
+            features = self.hallucination_discriminator.extract_features(prompt, entropy_stats)
+            # 预测幻觉风险
+            hallucination_result = self.hallucination_discriminator.predict(features)
+            hallucination_risk = hallucination_result["risk_probability"]
+            is_hallucination = hallucination_result["is_hallucination"]
+            
+            # 如果检测到高幻觉风险，进行截断
+            if is_hallucination:
+                audit_data = {
+                    "session_id": id(self.working_memory),
+                    "input_text": prompt,
+                    "output_text": "[内容被幻觉判别器拦截]",
+                    "tokens": 0,
+                    "entropy_stats": entropy_stats,
+                    "van_event": True,
+                    "cutoff": True,
+                    "cutoff_reason": f"High hallucination risk: {hallucination_risk:.2f}"
+                }
+                audit_entry = self.audit_writer.write_entry(audit_data)
+                audit_signature = audit_entry.current_hash
+                audit_hash_chain = [entry.current_hash for entry in self.audit_writer.get_entries()]
+
+                return GenerationResult(
+                    text="[内容被幻觉判别器拦截 - 高幻觉风险]",
+                    tokens=0,
+                    latency=time.time() - start_time,
+                    cutoff=True,
+                    cutoff_reason=f"High hallucination risk: {hallucination_risk:.2f}",
+                    entropy_stats=entropy_stats,
+                    van_event=True,
+                    security_verified=False,
+                    audit_signature=audit_signature,
+                    audit_hash_chain=audit_hash_chain
+                )
+
         contextual_temp = temperature
         if self.use_contextual_temperature and self.contextual_temperature_controller is not None:
             detected_scene = self.contextual_temperature_controller.detect_scene(prompt, context)
@@ -1518,6 +1572,45 @@ class HybridEnlightenLM:
             output_text, tokens = self._generate_local(context, max_length, contextual_temp)
         else:
             output_text, tokens = self._generate_api(context, max_length)
+
+        # 生成后使用幻觉判别器检测幻觉风险
+        if self.use_hallucination_discriminator and self.hallucination_discriminator is not None:
+            # 提取特征
+            entropy_stats = self.working_memory.compute_entropy_stats()
+            features = self.hallucination_discriminator.extract_features(output_text, entropy_stats)
+            # 预测幻觉风险
+            hallucination_result = self.hallucination_discriminator.predict(features)
+            hallucination_risk = hallucination_result["risk_probability"]
+            is_hallucination = hallucination_result["is_hallucination"]
+            
+            # 如果检测到高幻觉风险，进行截断
+            if is_hallucination:
+                audit_data = {
+                    "session_id": id(self.working_memory),
+                    "input_text": prompt,
+                    "output_text": "[内容被幻觉判别器拦截]",
+                    "tokens": tokens,
+                    "entropy_stats": entropy_stats,
+                    "van_event": True,
+                    "cutoff": True,
+                    "cutoff_reason": f"High hallucination risk in output: {hallucination_risk:.2f}"
+                }
+                audit_entry = self.audit_writer.write_entry(audit_data)
+                audit_signature = audit_entry.current_hash
+                audit_hash_chain = [entry.current_hash for entry in self.audit_writer.get_entries()]
+
+                return GenerationResult(
+                    text="[内容被幻觉判别器拦截 - 输出中检测到高幻觉风险]",
+                    tokens=tokens,
+                    latency=time.time() - start_time,
+                    cutoff=True,
+                    cutoff_reason=f"High hallucination risk in output: {hallucination_risk:.2f}",
+                    entropy_stats=entropy_stats,
+                    van_event=True,
+                    security_verified=False,
+                    audit_signature=audit_signature,
+                    audit_hash_chain=audit_hash_chain
+                )
 
         self.working_memory.add_turn("assistant", output_text)
 

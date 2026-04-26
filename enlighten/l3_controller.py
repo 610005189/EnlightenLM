@@ -483,7 +483,7 @@ class BayesianL3Controller(nn.Module):
     - 病因后验概率 P(H | o_int)
     """
 
-    def __init__(self, prior_probs=[0.6, 0.2, 0.2]):
+    def __init__(self, prior_probs=[0.5, 0.2, 0.2, 0.1]):
         super().__init__()
         import numpy as np
         self.p_H = np.array(prior_probs)
