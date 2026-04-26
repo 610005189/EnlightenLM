@@ -1283,21 +1283,29 @@ class HybridEnlightenLM:
         self.use_skeleton_l2 = use_skeleton_l2
 
         # 从config.model_provider读取模型提供者配置
-        if hasattr(config, 'model_provider'):
+        if isinstance(config, dict):
+            model_provider = config.get('model_provider', {})
+            self.use_local_model = model_provider.get('use_local_model', False)
+            self.local_model_name = model_provider.get('local_model_name', 'distilgpt2')
+
+            if not self.use_local_model and self.api_client is None:
+                api_provider = model_provider.get('api_provider', 'ollama')
+                api_model = model_provider.get('api_model', 'qwen2.5:14b')
+
+                if api_provider == "ollama":
+                    self.api_client = OllamaAPIClient(OllamaConfig(model=api_model))
+        elif hasattr(config, 'model_provider'):
             model_provider = config.model_provider
             self.use_local_model = model_provider.use_local_model
             self.local_model_name = model_provider.local_model_name
 
-            # 如果没有提供api_client，从配置中创建
             if not self.use_local_model and self.api_client is None:
                 api_provider = model_provider.api_provider
                 api_model = model_provider.api_model
 
                 if api_provider == "ollama":
                     self.api_client = OllamaAPIClient(OllamaConfig(model=api_model))
-                # 可以添加其他API提供者的支持
         else:
-            # 默认值
             self.use_local_model = False
             self.local_model_name = "distilgpt2"
 
