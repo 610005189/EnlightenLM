@@ -77,10 +77,11 @@ class HallucinationDiscriminator(nn.Module):
         )
         
         # 加载预训练模型（如果有）
-        if config.model_path and torch.cuda.is_available():
+        if config.model_path:
             try:
-                self.load_state_dict(torch.load(config.model_path))
-                print(f"Loaded hallucination discriminator model from {config.model_path}")
+                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                self.load_state_dict(torch.load(config.model_path, map_location=device))
+                print(f"Loaded hallucination discriminator model from {config.model_path} on {device}")
             except Exception as e:
                 print(f"Failed to load model: {e}")
         
