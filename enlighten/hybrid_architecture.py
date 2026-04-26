@@ -1294,6 +1294,14 @@ class HybridEnlightenLM:
 
                 if api_provider == "ollama":
                     self.api_client = OllamaAPIClient(OllamaConfig(model=api_model))
+                elif api_provider == "deepseek":
+                    from .api.deepseek_client import DeepSeekAPIClient, DeepSeekConfig
+                    self.api_client = DeepSeekAPIClient(DeepSeekConfig(model=api_model))
+                elif api_provider == "dashscope":
+                    from .api.dashscope_client import DashScopeAPIClient, DashScopeConfig
+                    self.api_client = DashScopeAPIClient(DashScopeConfig(model=api_model))
+                else:
+                    raise ValueError(f"不支持的API提供者: {api_provider}，支持的提供者: ollama, deepseek, dashscope")
         elif hasattr(config, 'model_provider'):
             model_provider = config.model_provider
             self.use_local_model = model_provider.use_local_model
@@ -1305,6 +1313,14 @@ class HybridEnlightenLM:
 
                 if api_provider == "ollama":
                     self.api_client = OllamaAPIClient(OllamaConfig(model=api_model))
+                elif api_provider == "deepseek":
+                    from .api.deepseek_client import DeepSeekAPIClient, DeepSeekConfig
+                    self.api_client = DeepSeekAPIClient(DeepSeekConfig(model=api_model))
+                elif api_provider == "dashscope":
+                    from .api.dashscope_client import DashScopeAPIClient, DashScopeConfig
+                    self.api_client = DashScopeAPIClient(DashScopeConfig(model=api_model))
+                else:
+                    raise ValueError(f"不支持的API提供者: {api_provider}，支持的提供者: ollama, deepseek, dashscope")
         else:
             self.use_local_model = False
             self.local_model_name = "distilgpt2"
