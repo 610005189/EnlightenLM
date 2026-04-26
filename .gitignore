@@ -66,3 +66,6 @@ tasks/
 
 # Results directory
 results/
+
+# Archived documents (legacy v2.5 designs, no longer on current roadmap)
+docs/archive/

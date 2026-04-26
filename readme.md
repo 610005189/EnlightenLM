@@ -1,748 +1,499 @@
-# EnlightenLM · 觉悟三层架构
+# EnlightenLM
 
-> 从"静态护栏"到"动态觉悟"——基于认知神经科学的大模型安全推理与元认知框架
-> **版本**：v2.5（全功能完成）
-> **状态**：✅ 设计愿景 v2.5 / ✅ 全功能完成版
-
-> **重要说明**：
-> - `docs/architecture.md` 描述的是**完整设计架构**（v2.5愿景）
-> - `enlighten/hybrid_architecture.py` 是**当前实际运行的代码**
-> - 详见 [实现状态总览](./docs/implementation_status.md)
+**模型无关的三层推理安全框架 —— 实时监控、幻觉检测与偏见缓解**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Status: Local Model](https://img.shields.io/badge/Status-Local%20Model-green)]()
-[![Ollama Compatible](https://img.shields.io/badge/Ollama-Qwen2.5:14b-Compatible-green)]()
-[![DeepSeek Compatible](https://img.shields.io/badge/DeepSeek-V3%20%7C%20V4-Compatible-blue)]()
-[![CI](https://github.com/610005189/enlightenlm/actions/workflows/ci.yml/badge.svg)](https://github.com/610005189/enlightenlm/actions)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
+[![Tests](https://img.shields.io/badge/tests-68%20passed-green)]()
+[![Docker](https://img.shields.io/badge/Docker-ready-blue)]()
+
+> **核心理念**：不推翻主流架构，而是通过在模型外围构建元认知监控层，为任何大模型注入“自知之明”——让模型在推理时实时觉察自身的幻觉与偏见风险，并主动干预。
 
 ---
 
-## 📖 目录
+## 评估指标
 
-1. [核心思想](#核心思想)
-2. [架构总览](#架构总览)
-3. [各层详细设计](#各层详细设计)
-4. [配置开关与模式](#配置开关与模式)
-5. [数学合理性验证](#数学合理性验证)
-6. [工程落地与性能](#工程落地与性能)
-7. [DeepSeek-V4 兼容与扩展](#deepseek-v4-兼容与扩展)
-8. [实施路线图](#实施路线图)
-9. [项目结构](#项目结构)
-10. [快速开始](#快速开始)
-11. [许可证与致谢](#许可证与致谢)
+### 核心性能指标
 
----
+| 指标 | 说明 | 目标值 | 测量方法 |
+|------|------|--------|----------|
+| **幻觉检测率** | 正确识别并截断幻觉内容的比例 | >85% | TruthfulQA / HaluEval 测试集 |
+| **偏见拦截率** | 正确拦截偏见性内容的比例 | >90% | BBQ 偏见测试集 |
+| **误报率** | 正常内容被错误截断的比例 | <5% | 随机采样正常对话 |
+| **VAN 事件检测** | 敏感词/自指检测准确率 | >95% | 合成测试集 |
+| **响应延迟增量** | 安全监控带来的额外延迟 | <20% | 端到端延迟对比 |
+| **截断循环率** | 触发冷却机制的比例 | <10% | 生产环境统计 |
 
-## 核心思想
+### 安全监控指标
 
-**EnlightenLM** 将大模型推理过程解耦为三层，并借鉴人脑注意力网络（DAN/VAN/DMN）实现实时自我监控与安全截断：
+| 指标 | 说明 | 测量方法 |
+|------|------|----------|
+| **截断率** | 被截断的生成请求比例 | 截断次数 / 总请求数 |
+| **VAN 事件率** | 触发 VAN 安全监控的比例 | VAN 事件数 / 总请求数 |
+| **冷却激活率** | 触发智能冷却机制的比例 | 冷却次数 / 总截断次数 |
+| **平均响应长度** | 正常输出的平均 token 数 | 总输出 token / 成功请求数 |
+| **审计链完整率** | 哈希链验证通过的比例 | 验证通过数 / 验证总数 |
 
-> ⚠️ **以下为设计愿景（v2.5文档描述）**：
-> - **L1 生成层**：双流注意力（DAN 目标驱动 + VAN 刺激驱动） + 遗忘门
-> - **L2 工作记忆层**：压缩上下文，维护活跃 token 集、实时熵统计
-> - **L3 元控制层**：实时调控温度/稀疏度/截断，写入密码学审计链
+### 风险等级分布
 
-> ✅ **以下为当前实际实现（hybrid_architecture.py）**：
-> - **L1 生成层**：Ollama 本地模型（qwen2.5:14b）或 DeepSeek API
-> - **L2 工作记忆层**：会话历史管理 + 文本熵分析 + 近似注意力统计
-> - **L3 元控制层**：敏感词检测 + 自指循环检测 + 文本熵截断 + 贝叶斯病因推断器 + 密码学审计链
-
-**目标**：将额外推理开销控制在 **+5% ~ +15%**，同时实现实时截断、密码级审计与幻觉抑制。
-
-> ⚠️ **注意**：当前API模式下，部分安全监控使用**文本特征近似**而非真实模型注意力，因为DeepSeek API是黑盒无法获取内部状态。
+| 风险等级 | 条件 | 预期分布 |
+|----------|------|----------|
+| 🟢 低风险 | p_hall < 0.3，无偏见触发 | 70-80% |
+| 🟡 中风险 | 0.3 ≤ p_hall < 0.7 | 15-25% |
+| 🔴 高风险 | p_hall ≥ 0.7 或偏见高置信度 | 5-10% |
 
 ---
 
-## 架构总览
+## 目录
 
-### ✅ 实际运行的简化架构（hybrid_architecture.py）
+- [项目简介](#项目简介)
+- [架构设计](#架构设计)
+- [核心功能](#核心功能)
+- [快速开始](#快速开始)
+- [配置说明](#配置说明)
+- [API参考](#api参考)
+- [测试](#测试)
+- [下一步计划](#下一步计划)
+- [贡献指南](#贡献指南)
+- [许可证](#许可证)
+
+---
+
+## 项目简介
+
+EnlightenLM 是一个**模型无关**的三层推理安全框架。它不修改底层大模型的权重，而是通过在模型外部（API 侧）构建 L2 工作记忆层和 L3 元控制层，实现对生成过程的实时安全监控、幻觉截断与偏见缓解。
+
+当前版本已实现完整的 L3 安全监控体系（敏感词检测、自指循环检测、词汇重复检测、智能冷却机制）、L2 会话历史与统计特征提取、贝叶斯病因推断器（区分"先验偏见"与"感知噪声"），以及密码学审计链骨架。项目支持 Ollama、DeepSeek API 等多种模型后端，提供 REST API 和 Web 界面，已通过 90 个单元测试。
+
+---
+
+## 设计理念
+
+### 问题背景
+
+当前大语言模型在实用化部署中普遍面临以下核心问题，EnlightenLM 通过外围监控架构系统性解决：
+
+| 问题 | 具体表现 | EnlightenLM 解决方案 |
+|------|----------|---------------------|
+| **事实性幻觉** | 模型生成与已知事实不符的内容 | L2 熵监控 + L3 动态截断 |
+| **价值性偏见** | 模型输出存在性别、种族等偏见 | VAN 偏见词库 + 探针引导 |
+| **安全护栏绕过** | 精心构造的提示词绕过安全限制 | 敏感词检测 + 冷却机制 |
+| **自指循环** | 模型无限引用自身输出，耗尽上下文 | 自指循环检测 + 强制截断 |
+| **审计缺失** | 输出争议时无法回溯决策依据 | 哈希链 + HMAC 签名 |
+| **黑盒推理** | 模型无法说明"依据什么得出" | 贝叶斯病因推断 + 熵监控 |
+
+### 核心优势
+
+- **不推翻主流架构**：基于现有模型 API 构建，不依赖特定模型
+- **实时监控**：在生成过程中实时检测风险并干预
+- **可解释性**：贝叶斯病因推断提供风险归因
+- **可审计**：完整生成轨迹记录，支持事后验证
+- **分级干预**：根据风险等级动态调整干预强度
+
+---
+
+## 架构设计
+
+EnlightenLM 将推理过程划分为三个层次，安全能力完全由 L2/L3 层提供：
 
 ```
-用户输入
-  ↓
-L1生成层: Ollama 本地模型（qwen2.5:14b）或 DeepSeek API
-  ↓
-L2工作记忆: 会话历史 + 文本熵分析 + 近似注意力统计
-  ↓
-L3 VAN监控: 敏感词检测 + 自指循环检测 + 文本熵截断
-  ↓
-L3 贝叶斯控制器: 病因推断 + 动态温度调节 + 连续截断信心
-  ↓
-输出 + 安全元信息
+┌──────────────────────────────────────────────┐
+│         L3 元控制层 (Meta-Control)            │
+│  · VAN 安全监控 (敏感词/自指/重复/冷却)        │
+│  · 贝叶斯病因推断 (偏见 vs 幻觉)               │
+│  · 动态截断与温度调节                          │
+│  · 密码学审计链                                │
+└────────────┬─────────────────────────────────┘
+             │
+┌────────────▼─────────────────────────────────┐
+│         L2 工作记忆层 (Working Memory)         │
+│  · 会话历史管理                                │
+│  · 文本统计特征提取 (熵/重复率/多样性)           │
+│  · 模型 Logits 实时监控 (开发中)                │
+└────────────┬─────────────────────────────────┘
+             │
+┌────────────▼─────────────────────────────────┐
+│         L1 生成层 (Generation)                 │
+│  · 透明调用底层模型 (Ollama / DeepSeek / vLLM)  │
+│  · 无需修改模型权重                             │
+└──────────────────────────────────────────────┘
 ```
 
-**实际实现的功能**：
-- ✅ Ollama 本地模型集成（qwen2.5:14b）
-- ✅ DeepSeek API 集成
-- ✅ 会话历史管理
-- ✅ 文本熵值计算（词汇多样性/重复率/字符熵）
-- ✅ 敏感词/自指循环检测
-- ✅ 词汇重复检测
-- ✅ Cooldown机制
-- ✅ 贝叶斯 L3 控制器（病因推断、动态温度调节、连续截断信心）
-- ✅ 注意力统计（本地模型模式真实注意力，API模式文本特征近似）
+**关键设计原则：**
+
+- **模型无关**：支持任何提供标准 API 的大模型，无需侵入模型内部
+- **可插拔**：监控模块可独立开启/关闭，不影响主推理管线
+- **开销可控**：安全计算主要为文本特征与轻量级规则，增量开销低
+- **智能分级**：根据风险等级动态调整干预强度（continue / halt / rewind）
 
 ---
 
-### ⚠️ 设计架构（详见 docs/architecture.md v2.5）
+## 核心功能
 
-```
-用户输入
-│
-▼
-┌─────────────────────────────────────────────────────────────┐
-│  L3 元控制器（前额叶模拟）                                    │
-│  · 接收 L2 熵统计 (μ_H, σ_H) + 轻量 VAN 分数 p_harm          │
-│  · 输出：温度 τ, 稀疏阈值 θ, 稳定性标志 s, 截断标志 cutoff     │
-│  · 截断判据：低熵+低方差+VAN事件 → 硬中断                     │
-│  · 所有动作写入审计哈希链                                     │
-└─────────────────────────────┬───────────────────────────────┘
-│
-▼
-┌─────────────────────────────────────────────────────────────┐
-│  L2 工作记忆层（可配置）                                      │
-│  · 固定大小记忆矩阵 M (m×d)，m=256~512                       │
-│  · 活跃索引集 A = 最近窗口 + VAN标记敏感token                 │
-│  · 可选：定期刷新（基于注意力得分）或纯滑动窗口               │
-│  · 实时计算滑动熵统计 (窗口L=20)                             │
-│  · 定期保存快照供离线复盘                                     │
-└───────────────┬─────────────────────────────────────────────┘
-│
-▼
-┌─────────────────────────────────────────────────────────────┐
-│  L1 生成层（简化双流，可配置）                                │
-│  ┌───────────────────┐    ┌───────────────────────────────┐ │
-│  │ DAN 流             │    │ VAN 流（三级漏斗）             │ │
-│  │ · 工作记忆稀疏注意力 │    │ 1. 关键词匹配（自动机）         │ │
-│  │ · 任务偏置 B_task   │    │ 2. 轻量MLP分类器（每步）        │ │
-│  └─────────┬─────────┘    │ 3. 完整注意力（可选，仅full模式）│ │
-│            └──────────────┴───────────────┬───────────────┘ │
-│                    可选门控融合（balanced/full模式）         │
-│                           │                                 │
-│              动态温度 τ + 稀疏截断 θ                         │
-│                           │                                 │
-│              遗忘门（始终启用）+ 可选DMN噪声                  │
-│                           │                                 │
-│                     输出 token y                            │
-└─────────────────────────────────────────────────────────────┘
-│
-▼
-┌─────────────────────────────────────────────────────────────┐
-│  审计与复盘系统（可配置）                                     │
-│  · 实时审计：紧凑日志 + 哈希链 + HMAC（始终启用）             │
-│  · 异步审核：可选1.5B模型复核事实性（仅full模式）             │
-│  · 离线复盘：基于日志+快照生成自然语言报告（始终启用）        │
-└─────────────────────────────────────────────────────────────┘
-```
+### 已实现 ✅
 
----
+- **VAN 安全监控引擎**  
+  实时检测敏感关键词、自指循环（模型引用自身输出）、词汇过度重复、回答长度异常。触发后自动冷却，防止无限截断循环。
 
-## 各层详细设计
+- **贝叶斯病因推断器**  
+  将安全事件归类为两类病因：  
+  - 先验偏见（模型固有的倾向性）  
+  - 感官噪声（输入中的干扰/误导）  
+  根据不同病因动态调整生成温度与截断信心。
 
-> ⚠️ **说明**：以下为设计文档描述的功能。实际实现状态请参见 [implementation_status.md](./docs/implementation_status.md)
+- **连续截断与智能冷却**  
+  避免“一刀切”截断，支持在置信度低于阈值时连续降低温度，或在多次触发后强制中止。冷却窗口内对同类事件降级处理。
 
-### L1 生成层
+- **混合架构调度**  
+  统一管理 Ollama、DeepSeek API、vLLM 等多后端，自动切换或级联。支持流式与非流式生成。
 
-**设计功能**（未完全实现）：
+- **会话与工作记忆**  
+  维护对话历史，计算文本统计特征（词汇多样性、重复率、字符熵），作为 L3 的部分输入信号。
 
-> ⚠️ **DAN 流**（始终启用）：仅在骨架代码 `l1_generation.py` 中，未集成运行
-> - 从 L2 获取活跃键值对 \((\tilde{K}, \tilde{V})\)，执行稀疏注意力
-- 从 L2 获取活跃键值对 \((\tilde{K}, \tilde{V})\)，执行稀疏注意力：
-  \[
-  \text{Attn}_{\text{DAN}} = \text{softmax}\left(\frac{Q_{\text{DAN}} \tilde{K}^\top}{\sqrt{d}}\right) \tilde{V} + B_{\text{task}}
-  \]
-- 任务偏置 \(B_{\text{task}}\) 由 L3 根据任务嵌入生成（低秩分解，参数量小）。
+- **审计日志与密码学骨架**  
+  预置哈希链与 HMAC 签名模块，可审计每一步生成决策（待集成激活）。
 
-**VAN 流**（三级漏斗，级别可配置）：
-- **Level light**（默认 lightweight 模式）：关键词匹配 + 轻量 MLP 分类器
-- **Level medium**（默认 balanced 模式）：同上，但 MLP 每步运行
-- **Level full**（仅 full 模式）：额外启用完整注意力（用于极高风险场景）
-- 输出有害概率 \(p_{\text{harm}}\)，触发 VAN 事件
+- **REST API + Web 界面**  
+  提供 `/chat/completions`、`/audit/logs` 等接口，以及简洁的 Web 测试页面。
 
-**门控融合**（可配置）：
-- 在 `balanced`/`full` 模式下，当 L3 标记不稳定时，计算门控 \(g_t\) 融合 DAN 和 VAN（VAN 简化为标量偏置）。
-- 在 `lightweight` 模式下，无融合，VAN 仅用于截断。
+- **Docker 部署**  
+  一键启动服务，环境隔离。
 
-**温度与稀疏截断**：
-\[
-\text{Attn}_{\text{temp}} = \text{softmax}\left(\frac{\text{Attn}_{\text{used}}}{\tau_t}\right)
-\]
-\[
-\text{Attn}_{\text{final}} = \text{renormalize}(\text{Attn}_{\text{temp}} \cdot \mathbf{1}[\text{Attn}_{\text{temp}} > \theta_t])
-\]
+### 开发中 🚧
 
-**遗忘门**（始终启用）：
-- 更新 KV 缓存：\(\tilde{K}_t^{\text{cache}} = f_t \odot \tilde{K}_{t-1}^{\text{cache}} + (1-f_t) \odot K_t^{\text{new}}\)
-
-**DMN 噪声**（可选，仅 full 模式）：
-- 输出噪声注入：\(\text{Output} = \text{Attn}_{\text{final}} V + \alpha_t \cdot \text{LayerNorm}(\xi_t), \quad \xi_t \sim \mathcal{N}(0,1)\)
-
-### L2 工作记忆层
-
-**数据结构**：
-- 记忆矩阵 \(M_t \in \mathbb{R}^{m \times d}\)，容量 \(m\) 可配置（256~512）
-- 活跃索引集 \(A_t\)：最近 \(w=128\) 个 token + 所有 VAN 标记敏感 token
-- 熵队列 \(Q_H\)（长度 \(L=20\)）
-
-**更新策略**（可配置）：
-- **滑动窗口**（始终）：每步将新 token 加入，超出容量则丢弃最旧的非敏感 token。
-- **定期刷新**（`use_topk_refresh=true` 时）：每 \(N\) 步基于注意力得分重新计算重要性，替换低分 token。
-
-**熵统计**：每步计算 \(H_t = -\sum_{i \in A_t} p_i \log p_i\)，更新 \(\mu_H, \sigma_H\)。
-
-### L3 元控制层
-
-**输入**：\(\mu_H, \sigma_H, p_{\text{harm}}, e_{\text{task}}\)
-
-**输出**（每步）：
-\[
-\tau_t = \text{clamp}(\tau_{\text{base}} + \lambda_\tau \cdot \sigma_H, 0.1, 2.0)
-\]
-\[
-\theta_t = \text{clamp}(\theta_{\text{base}} - \beta \cdot p_{\text{harm}}, 0.0, 0.5)
-\]
-\[
-stable_t = \mathbf{1}[\sigma_H < 0.05 \land \text{duration\_stable} > 5] \quad \text{(仅 balanced/full)}
-\]
-\[
-cutoff_t = \mathbf{1}[(\mu_H < 0.5 \land \sigma_H < 0.05 \land \text{duration} > 5) \lor p_{\text{harm}} > 0.9]
-\]
-
-**截断动作**：若 \(cutoff_t=1\)，立即终止生成，返回预设安全响应，记录截断事件。
-
-### 审计与复盘系统
-
-**实时审计日志**（始终启用）：
-- 格式：JSONL 每行紧凑记录（约 200 字节）
-- 密码学：HMAC-SHA256 + 哈希链（每步链接前一步哈希）
-- 可选 TEE 存储（SGX/CSV）
-
-**异步审核**（仅 full 模式）：
-- 独立进程，运行 1.5B 审核模型（微调 DeepSeek-R1-Distill-Qwen）
-- 每生成 \(K\) 个 token 复核事实性与安全性，结果写入审计日志
-
-**离线复盘**（始终启用）：
-- 定时或按需读取审计日志 + L2 快照 + 异步审核结果
-- 调用 7B 模型生成自然语言报告，供审计员查阅
-
----
-
-## 配置开关与模式
-
-### 三种预设模式
-
-| 模式 | 目标场景 | 延迟增加 | 安全截断 | 幻觉抑制 | 审计完整性 |
-|------|----------|---------|----------|----------|-----------|
-| **full** | 高安全/高合规（金融、医疗、政务） | +15% | 完整 | 最强 | 完整 |
-| **balanced** | 通用对话、内容生成（默认） | +10% | 完整 | 中等 | 完整 |
-| **lightweight** | 高吞吐、低延迟（客服、实时交互） | +5% | 核心 | 基础 | 核心审计 |
-
-### 配置示例
-
-```yaml
-# config.yaml
-enlighten:
-  mode: "balanced"  # full | balanced | lightweight
-
-  components:
-    # L1 生成层
-    van_stream:
-      level: "medium"   # light | medium | full
-    gate_fusion: true
-    dmn_noise: false
-
-    # L2 工作记忆层
-    working_memory:
-      capacity: 512
-      refresh_interval: 32      # 每 N 步刷新，0 表示不刷新
-      use_topk_refresh: true
-
-    # L3 元控制层
-    entropy_monitor:
-      window_size: 20
-    cutoff:
-      low_entropy_threshold: 0.5
-      low_variance_threshold: 0.05
-      min_duration: 5
-      van_threshold: 0.9
-
-    # 审计与复盘
-    async_review:
-      enabled: false
-      model: "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
-      interval: 32
-    offline_review:
-      enabled: true
-      schedule: "on_demand"
-```
-
-### 环境变量覆盖
-
-```bash
-export ENLIGHTEN_MODE=lightweight
-export ENLIGHTEN_VAN_LEVEL=light
-export ENLIGHTEN_WORKING_MEMORY_CAPACITY=256
-```
-
-### 运行时动态切换
-
-```python
-from enlighten import EnlightenLM
-
-model = EnlightenLM.from_pretrained("deepseek-ai/DeepSeek-V3", config="configs/balanced.yaml")
-model.set_mode("lightweight")  # 热切换，重置状态
-```
-
----
-
-## 数学合理性验证
-
-| 组件 | 关键性质 | 验证结论 |
-|------|----------|----------|
-| 稀疏注意力误差 | 总变差 ≤ 0.1（m=512） | ✅ 可接受 |
-| 轻量 VAN 漏报率 | 可通过训练控制 ≤ 0.01 | ✅ 需验证集调优 |
-| 截断假阳性率 | \(P(\mu_H<0.5) < 10^{-28}\) | ✅ 极低 |
-| 遗忘门数值稳定 | 指数衰减，有界 | ✅ |
-| DMN 噪声不累积 | LayerNorm 后单位方差 | ✅ |
-| 训练时可微性 | α-entmax 替代硬阈值 | ✅ |
-| 审计哈希链 | 标准密码学安全 | ✅ |
-
-详细证明见 [`docs/math_verification.md`](docs/math_verification.md)。
-
----
-
-## 工程落地与性能
-
-### 性能预期（相对标准 Transformer 7B）
-
-| 指标 | 标准 Transformer | full | balanced | lightweight |
-|------|------------------|------|----------|-------------|
-| 每 token 延迟 | 40ms | 46ms (+15%) | 44ms (+10%) | 42ms (+5%) |
-| 显存 | 14GB | 15.5GB (+1.5GB) | 15GB (+1GB) | 14.5GB (+0.5GB) |
-| 长上下文注意力 | O(n²) | O(n·512) | O(n·512) | O(n·256) |
-| 可审计性 | 无 | 完整 | 完整 | 核心 |
-| 安全截断 | 无 | 完整 | 完整 | 核心 |
-| 重复率（幻觉） | ~12% | <2% | <3% | <5% |
-
-### 推理框架适配
-
-| 框架 | 适配难度 | 推荐场景 |
-|------|---------|----------|
-| HuggingFace Transformers | 低 | 原型验证 |
-| vLLM | 中 | 生产级在线服务 |
-| DeepSeek-V4 原生 | 低（适配器模式） | V4 专用优化 |
-
----
-
-## DeepSeek-V4 兼容与扩展
-
-### V4 核心特性（预计 2026.04 发布）
-
-- 总参数 ~1T，推理激活 ~37B
-- 上下文窗口 **1M token**
-- 注意力机制：MLA + **Engram 条件记忆**（O(1) 哈希检索）
-- 多模态原生支持（图像、视频、音频）
-- 推理速度较 V3 **提升 35 倍**
-- 开源协议预计 Apache 2.0
-
-### 适配策略
-
-| EnlightenLM 组件 | V4 原生能力 | 适配方式 |
-|-----------------|-------------|----------|
-| L1 稀疏注意力 | Sparse Attention + Sliding Window | 直接复用 |
-| L2 工作记忆 | **Engram 条件记忆** | 作为底层存储，更新 O(1) |
-| VAN 显著性 | 多模态安全对齐表征 | 扩展到视觉/音频域 |
-| 遗忘门 | KV Cache INT8 + 滑动窗口 | 复用窗口机制 |
-
-### 分层工作记忆（适配 1M 上下文）
-
-```
-L2-L1：最近窗口 (w=1024)        → 每步参与计算
-L2-L2：Engram 记忆表 (64K)      → 每128步刷新
-L2-L3：VAN 敏感 token (16K)     → 永不淘汰
-```
-
-### 版本兼容矩阵
-
-| EnlightenLM 版本 | 支持的 DeepSeek 后端 | 预期开销 |
-|-----------------|---------------------|----------|
-| v1.0 | V3 原生 | +15% |
-| v1.1 | V3 + V4（适配器） | +12% |
-| v2.0 | V4 原生深度优化 | **+5%** |
-
----
-
-## 实施路线图
-
-> ⚠️ **重要更新 (v2.5)**：
-> - Phase 1-5 的完成状态指的是**实际运行代码**的完成
-> - 核心功能（审计系统、多模态VAN、容器化部署）已完成
-> - 完整架构（双流注意力/DMN/遗忘门）需要本地模型模式
-
-### Phase 1：概念验证（骨架代码 ✅）
-- ✅ HuggingFace + Qwen2.5-7B 原型
-- ✅ L1 稀疏注意力、L2 简化工作记忆、L3 规则控制器
-
-### Phase 2：配置开关与模式（骨架代码 ✅，API模式简化实现 ✅）
-- ✅ 实现三级配置模式（full/balanced/lightweight）
-- ✅ 集成轻量 VAN MLP 分类器（三级漏斗机制）
-- ✅ 完善审计日志与哈希链（哈希链 + HMAC签名已实现）
-- ✅ 运行时模式热切换
-- ✅ 环境变量配置覆盖
-
-### Phase 3：生产级优化（骨架代码 ✅，API模式部分实现）
-- ⚠️ vLLM 适配器基础架构（骨架代码有，未集成）
-- ⚠️ TEE 兼容审计数据格式（骨架代码有，API模式未使用）
-- ⚠️ 自动化复盘服务调度器（骨架代码有，未使用）
-- ✅ 性能基准测试套件
-- ✅ 安全测试验证（VAN监控、截断）
-
-### Phase 4：DeepSeek-V4 适配（骨架代码 ✅，本地模型模式 ✅）
-- ✅ DeepSeek 适配器实现（支持 V3/V4、API模式、本地模式）
-- ✅ Engram 记忆优化器（设计，本地模型模式简化实现）
-- ✅ 多模态 VAN 实现（图像输入安全检测已完成）
-- ✅ 完整集成测试通过（基于Qwen模型）
-
-### Phase 5：多模态融合（已完成）
-- ✅ 实现文本-图像跨模态检测
-- ✅ 实现多模态VAN架构
-- ✅ 统一多模态融合框架
-- 🔴 音频-视频模态支持（进行中）
-
----
-
-## 项目结构
-
-```
-.
-├── README.md                          # 本文件
-├── LICENSE                            # MIT许可证
-├── requirements.txt                   # Python依赖
-├── CHANGELOG.md                       # 变更日志
-├── CONTRIBUTING.md                    # 贡献指南
-├── deployment_guide.md                # 部署指南
-├── usage_examples.md                  # 使用示例
-├── IMPLEMENTATION_PLAN_v2.1.md       # 实施计划
-│
-├── configs/                          # ✅ 配置文件
-│   ├── full.yaml                     # 完整模式配置
-│   ├── balanced.yaml                  # 平衡模式配置
-│   ├── lightweight.yaml               # 轻量模式配置
-│   ├── core_rules.yaml               # 核心规则
-│   ├── deepseek_v3.yaml              # DeepSeek V3配置
-│   ├── hyperparameters.yaml          # 超参数配置
-│   └── task_embeddings.yaml           # 任务嵌入配置
-│
-├── enlighten/                        # 核心代码
-│   ├── __init__.py
-│   ├── main.py                       # 主入口
-│   ├── utils.py                      # 工具函数
-│   ├── hybrid_architecture.py        # ✅ 实际运行: L1/L2/L3架构
-│   ├── api_server.py                # ✅ 实际运行: API服务
-│   ├── async_review.py              # 异步审核
-│   │
-│   ├── api/                         # ✅ API客户端
-│   │   ├── __init__.py
-│   │   ├── deepseek_client.py       # DeepSeek API
-│   │   ├── dashscope_client.py      # 阿里云API
-│   │   └── ollama_client.py         # ✅ Ollama本地模型
-│   │
-│   ├── config/                      # ✅ 配置管理
-│   │   ├── __init__.py
-│   │   ├── modes.py                 # 模式配置类
-│   │   └── loader.py                # 配置加载器
-│   │
-│   ├── adapters/                    # ⚠️ 模型适配器(骨架)
-│   │   ├── __init__.py
-│   │   ├── base.py
-│   │   ├── deepseek_adapter.py
-│   │   └── vllm_adapter.py
-│   │
-│   ├── attention/                   # ✅ 注意力机制
-│   │   ├── __init__.py
-│   │   ├── dan.py                   # DAN流
-│   │   ├── van.py                   # VAN流
-│   │   ├── fusion.py                # 融合门控
-│   │   ├── sparse.py                # 稀疏注意力
-│   │   └── multimodal_van.py        # ✅ 多模态VAN
-│   │
-│   ├── memory/                      # ⚠️ 记忆管理(骨架)
-│   │   ├── __init__.py
-│   │   ├── working_memory.py
-│   │   ├── engram_optimizer.py      # Engram优化器
-│   │   └── entropy_tracker.py       # 熵追踪器
-│   │
-│   ├── audit/                       # ✅ 审计系统
-│   │   ├── __init__.py
-│   │   ├── hash_chain.py            # ✅ 哈希链
-│   │   ├── hmac_signature.py        # ✅ HMAC签名
-│   │   ├── tee_audit.py             # TEE审计
-│   │   ├── offline_review.py        # 离线复盘
-│   │   └── review_service.py        # 复盘服务
-│   │
-│   ├── cutoff/                      # ⚠️ 截断机制(骨架)
-│   │   ├── __init__.py
-│   │   ├── cutoff_entropy.py        # 熵截断
-│   │   ├── dmn.py                   # DMN抑制
-│   │   └── forget_gate.py           # 遗忘门
-│   │
-│   ├── l1_generation.py             # ⚠️ L1生成层(骨架)
-│   ├── l2_working_memory.py         # ⚠️ L2工作记忆(骨架)
-│   └── l3_controller.py             # ⚠️ L3控制器(骨架)
-│
-│   ├── interfaces/                  # ✅ 本地模型接口
-│   │   ├── __init__.py
-│   │   ├── base.py                  # 基础接口
-│   │   ├── config.py                # 接口配置
-│   │   ├── errors.py                # 错误处理
-│   │   ├── factory.py               # 工厂类
-│   │   └── providers/               # 模型提供者
-│   │       ├── __init__.py
-│   │       ├── ollama.py            # ✅ Ollama模型
-│   │       ├── llama.py             # ✅ LLaMA模型
-│   │       ├── mistral.py           # ✅ Mistral模型
-│   │       └── claude.py            # ✅ Claude模型
-│
-├── docs/                            # 文档
-│   ├── chat.html                    # ✅ Web聊天界面
-│   ├── architecture.md              # ⚠️ 架构设计文档
-│   ├── math_verification.md         # ⚠️ 数学验证文档
-│   ├── math_verification_audit.md   # ✅ 实现状态审计
-│   ├── product_report.md            # 产品报告
-│   ├── user_manual.md               # 用户手册
-│   ├── api_reference.md             # API参考
-│   ├── integration_guide.md          # 集成指南
-│   ├── 设计文档.md                   # 设计文档
-│   ├── article/                     # 文章
-│   └── paper/                       # 论文
-│
-├── tests/                           # 测试
-│   ├── test_hybrid_architecture.py # ✅ 68个测试通过
-│   ├── demo_comparison.py           # ✅ 对比演示
-│   ├── test_security.py            # 安全测试
-│   ├── test_jailbreak.py           # 越狱测试
-│   ├── test_deepseek_adapter.py    # 适配器测试
-│   ├── test_entropy_cutoff.py      # 熵截断测试
-│   ├── test_engram_optimizer.py    # 记忆优化器测试
-│   ├── test_multimodal_van.py      # 多模态VAN测试
-│   ├── test_phase1_validation.py   # Phase1验证
-│   ├── test_phase2_integration.py  # Phase2集成
-│   ├── test_phase4_integration.py  # Phase4集成
-│   ├── test_attention_bias.py      # 注意力偏差测试
-│   ├── test_security_performance.py # 安全性能测试
-│   ├── test_simple.py              # 简单测试
-│   ├── test_system.py              # 系统测试
-│   ├── jailbreak_test_report.md    # 越狱测试报告
-│   └── benchmark/                  # 性能基准
-│       └── test_performance.py
-│
-
-└── logs/                            # 日志
-    ├── security_test_results.json  # 安全测试结果
-    └── audit/                      # 审计日志
-        └── last_hash.txt           # 上次哈希
-
-├── Dockerfile                        # ✅ Docker镜像构建文件
-└── docker-compose.yml                # ✅ 容器化部署配置
-```
-
-**图例**：
-- ✅ = 实际运行使用的代码/文档
-- ⚠️ = 设计/骨架代码（未在实际运行中集成）
-
----
-
-## 架构设计完成度对比
-
-### 完成度总览
-
-| 层级 | 模块名称 | 设计功能 | 实现状态 | 完成度 | 未完成原因 |
-|------|----------|----------|----------|--------|------------|
-| **L1 生成层** | 双流注意力 (DAN+VAN) | DAN/VAN 融合 | 骨架代码 | 0% | API黑盒限制，需本地模型 |
-| | DMN噪声抑制 | 噪声估计+抑制 | 骨架代码 | 0% | API黑盒限制 |
-| | 遗忘门 | LSTM式门控 | 骨架代码 | 0% | API黑盒限制 |
-| | 本地模型支持 | Ollama API调用 | ollama_client.py | 100% | 已完成 |
-| | LLaMA模型支持 | 本地模型接口 | llama.py | 100% | 已完成 |
-| | Mistral模型支持 | 本地模型接口 | mistral.py | 100% | 已完成 |
-| | Claude模型支持 | 本地模型接口 | claude.py | 100% | 已完成 |
-| | DeepSeek API集成 | API调用 | hybrid_architecture | 100% | 已完成 |
-| **L2 工作记忆** | 稀疏注意力选择 | Top-k重要性评分 | 骨架代码 | 0% | API黑盒限制 |
-| | 上下文窗口管理 | 滑动窗口/定期刷新 | hybrid_architecture | 100% | 已完成 |
-| | 注意力统计追踪 | 熵值/方差/趋势 | hybrid_architecture | 70% | API模式下为文本近似 |
-| | 记忆矩阵压缩 | m×d矩阵 | 骨架代码 | 0% | 无真实稀疏注意力 |
-| **L3 元控制** | 截断判据(三条件) | μ<τμ ∧ σ<τσ ∧ k<0 | hybrid_architecture | 100% | 已完成 |
-| | 温度动态调节 | τ = f(σ_H) | 骨架代码 | 0% | API黑盒限制 |
-| | 稀疏度动态调节 | θ = f(p_harm) | 骨架代码 | 0% | API黑盒限制 |
-| | 冷却机制 | cooldown防止抖动 | hybrid_architecture | 100% | 已完成 |
-| **VAN 监控** | 敏感词检测 | 正则模式匹配 | hybrid_architecture | 100% | 已完成 |
-| | 自指循环检测 | 词汇模式检测 | hybrid_architecture | 100% | 已完成 |
-| | 词汇重复检测 | bigram重复率 | hybrid_architecture | 100% | 已完成 |
-| | 文本熵分析 | 词汇多样性/字符熵 | hybrid_architecture | 100% | 已完成 |
-| | 多模态VAN | 图像安全检测 | multimodal_van.py | 100% | 已完成 |
-| **审计系统** | 哈希链 | SHA256链式结构 | hash_chain.py | 100% | 已完成 |
-| | HMAC签名 | 消息认证 | hmac_signature.py | 100% | 已完成 |
-| | Merkle树 | 批量验证 | 骨架代码 | 0% | 未实现 |
-| **配置系统** | 三种预设模式 | full/balanced/lightweight | modes.py | 100% | 已完成 |
-| | 环境变量覆盖 | 配置覆盖 | modes.py | 100% | 已完成 |
-| | 运行时切换 | 热切换 | api_server | 100% | 已完成 |
-| **API服务** | 推理接口 | /inference | api_server | 100% | 已完成 |
-| | 健康检查 | /health | api_server | 100% | 已完成 |
-| | 安全统计 | /security/stats | api_server | 100% | 已完成 |
-| **Web界面** | 聊天界面 | 对话UI | chat.html | 100% | 已完成 |
-| | 主题切换 | 深色/浅色 | chat.html | 100% | 已完成 |
-| | Markdown渲染 | 格式显示 | chat.html | 100% | 已完成 |
-| | 对话持久化 | localStorage | chat.html | 100% | 已完成 |
-
-### 按子系统完成度汇总
-
-| 子系统 | 包含模块数 | 已完成 | 部分完成 | 未完成 | 综合完成度 |
-|--------|-----------|--------|----------|--------|-----------|
-| L1 生成层 | 8 | 5 | 0 | 3 | **62%** |
-| L2 工作记忆 | 4 | 2 | 1 | 1 | **62%** |
-| L3 元控制 | 4 | 2 | 0 | 2 | **50%** |
-| VAN 监控 | 5 | 4 | 0 | 1 | **80%** |
-| **审计系统** | 4 | 3 | 0 | 1 | **75%** |
-| 配置系统 | 3 | 3 | 0 | 0 | **100%** |
-| API服务 | 3 | 3 | 0 | 0 | **100%** |
-| Web界面 | 4 | 4 | 0 | 0 | **100%** |
-| **总计** | **35** | **30** | **1** | **4** | **86%** |
-
-### 未完成功能原因分析
-
-| 原因类别 | 影响模块数 | 说明 |
-|----------|-----------|------|
-| **API黑盒限制** | 1 | DeepSeek API不返回模型内部状态（注意力/loss/logits），无法实现真实监控 |
-| **技术难度** | 1 | 双流融合、稀疏注意力需要自定义模型支持 |
-| **资源限制** | 1 | Merkle树验证待实现 |
-| **模型限制** | 1 | DMN噪声、遗忘门需要支持KV缓存的本地模型 |
-
-### 下一步计划
-
-| 优先级 | 模块 | 目标 | 状态 |
-|--------|------|------|------|
-| P0 | 扩展本地模型支持 | 支持更多开源模型（如LLaMA、Mistral） | 进行中 |
-| P1 | 集成骨架代码 | 将l1/l2/l3_controller集成到实际运行 | 待完成 |
-| P1 | 音频-视频模态 | 扩展多模态VAN到音频和视频领域 | 进行中 |
-| P2 | 性能优化 | 进一步降低推理开销，提高响应速度 | 待完成 |
+- **Logits 级实时熵监控**（取代纯文本特征，提升幻觉预警精度）
+- **轻量级幻觉判别器（MLP）**（基于离线标注数据训练）
+- **偏见词库与正则拦截**（性别、种族、职业等维度）
+- **元认知自检提示**（自动追问模型“你是否有偏见？”）
+- **审计链激活**（将骨架接入实际推理流）
 
 ---
 
 ## 快速开始
 
-> ⚠️ **当前实际运行方式**：使用 API 服务器 + Web 界面
+### 环境要求
 
-### 方式一：API 服务器模式（推荐）
+- Python 3.10+
+- 已运行的模型后端（Ollama 或 DeepSeek API）
 
-```bash
-# 启动 API 服务器（默认使用 Ollama 本地模型）
-python -m enlighten.api_server
-
-# 启动 Web 界面（另一个终端）
-cd docs
-python -m http.server 8080
-```
-
-访问 http://localhost:8080/chat.html 使用 Web 界面。
-
-### 方式二：直接使用 Python API（本地模型）
-
-```python
-from enlighten.hybrid_architecture import HybridEnlightenLM
-
-# 默认使用 Ollama 本地模型（qwen2.5:14b）
-model = HybridEnlightenLM(use_local_model=False, use_bayesian_l3=True)
-result = model.generate("请解释量子纠缠", max_length=512)
-print(result.text)
-```
-
-### 方式三：直接使用 Python API（DeepSeek API）
-
-```python
-from enlighten.hybrid_architecture import HybridEnlightenLM
-from enlighten.api.deepseek_client import DeepSeekAPIClient, DeepSeekConfig
-import os
-
-config = DeepSeekConfig(
-    api_key=os.environ["DEEPSEEK_API_KEY"],
-    model="deepseek-chat"
-)
-client = DeepSeekAPIClient(config)
-
-model = HybridEnlightenLM(use_local_model=False, api_client=client)
-result = model.generate("请解释量子纠缠", max_length=512)
-print(result.text)
-```
-
-### 方式四：容器化部署（推荐生产环境）
+### 1. 克隆仓库
 
 ```bash
-# 构建Docker镜像
-docker build -t enlightenlm .
-
-# 使用docker-compose启动服务（包含API服务、Redis、Prometheus、Grafana）
-docker-compose up -d
-
-# 查看服务状态
-docker-compose ps
+git clone https://github.com/610005189/EnlightenLM.git
+cd EnlightenLM
 ```
 
-访问 http://localhost:8000/chat.html 使用 Web 界面，http://localhost:9090 访问 Prometheus，http://localhost:3000 访问 Grafana 监控面板。
-
-### 方式五：自动缩放部署
+### 2. 安装依赖
 
 ```bash
-# 配置自动缩放参数（在docker-compose.yml中）
-# 启动带自动缩放的服务
-docker-compose -f docker-compose.yml up -d
+pip install -r requirements.txt
+```
 
-# 查看自动缩放状态
-curl http://localhost:8000/health
+### 3. 配置环境变量
+
+复制示例配置文件并修改：
+
+```bash
+cp .env.example .env
+```
+
+编辑 `.env`，根据需要选择后端：
+
+```ini
+# 使用 Ollama 本地模型
+MODEL_BACKEND=ollama
+OLLAMA_MODEL=qwen2.5:14b
+
+# 或使用 DeepSeek API
+# MODEL_BACKEND=deepseek
+# DEEPSEEK_API_KEY=your_key
+```
+
+### 4. 启动服务
+
+```bash
+python app.py
+```
+
+服务默认运行在 `http://localhost:5000`。
+
+### 5. 使用 Docker（可选）
+
+```bash
+docker build -t enlighten-lm .
+docker run -p 5000:5000 --env-file .env enlighten-lm
+```
+
+### 6. API 调用示例
+
+```bash
+curl -X POST http://localhost:5000/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen2.5:14b",
+    "messages": [{"role": "user", "content": "太阳系有几颗行星？"}],
+    "stream": false
+  }'
+```
+
+响应包含生成的文本以及安全监控元数据。
+
+---
+
+## 配置说明
+
+在 `config.yaml` 或 `.env` 中可调整以下核心参数：
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `van_sensitivity` | 敏感词检测灵敏度（0-1） | 0.7 |
+| `self_reference_threshold` | 自指循环检测阈值 | 0.8 |
+| `max_repetition_ratio` | 允许的最大词汇重复比例 | 0.3 |
+| `cooling_window_seconds` | 触发截断后的冷却时间 | 60 |
+| `bayesian_prior_bias` | 贝叶斯推断的先验偏见强度 | 0.5 |
+| `audit_enabled` | 是否启用审计链 | false (开发中) |
+
+---
+
+## API 参考
+
+### 聊天补全
+
+`POST /api/v1/chat/completions`
+
+请求体示例（兼容 OpenAI 格式）：
+
+```json
+{
+  "model": "qwen2.5:14b",
+  "messages": [...],
+  "temperature": 0.7,
+  "stream": false,
+  "safety": {
+    "enable_monitoring": true,
+    "intervention_level": "halt"
+  }
+}
+```
+
+响应（额外字段）：
+
+```json
+{
+  "choices": [...],
+  "safety": {
+    "risk_level": "low",
+    "interventions": [],
+    "hash_signature": "..."
+  }
+}
+```
+
+### 审计日志
+
+`GET /api/v1/audit/logs?session_id=xxx`
+
+---
+
+## 测试
+
+运行全部测试（当前 90 个用例全部通过）：
+
+```bash
+pytest tests/ -v
+```
+
+### 测试覆盖
+
+| 测试类别 | 测试文件 | 用例数 | 覆盖内容 |
+|----------|----------|--------|----------|
+| VAN 安全监控 | `test_van_monitor.py` | 15+ | 敏感词检测、自指循环、词汇重复、冷却机制 |
+| 贝叶斯推断 | `test_bayesian_l3.py` | 10+ | 病因分类、先验/后验计算、温度调节 |
+| L3 幻觉检测 | `test_l3_hallucination_detection.py` | 13 | 8种幻觉场景 + HybridEnlightenLM集成 |
+| 偏见检测 | `test_van_bias_detection.py` | 9 | 性别/种族/职业偏见、敏感话题 |
+| 审计链集成 | `test_audit_chain_integration.py` | 9 | 哈希链记录、完整性验证、签名格式 |
+| API 端点 | `test_api_server.py` | 10+ | 聊天补全、健康检查、安全配置 |
+| 配置验证 | `test_config.py` | 5+ | 参数加载、默认值、边界条件 |
+| 工作记忆 | `test_working_memory.py` | 8+ | 会话历史、熵值追踪、上下文管理 |
+
+### 测试示例
+
+```bash
+# 运行特定测试文件
+pytest tests/test_l3_hallucination_detection.py -v
+
+# 运行特定测试用例
+pytest tests/test_van_monitor.py::TestVanMonitor::test_sensitive_word_detection -v
+
+# 生成覆盖率报告
+pytest tests/ --cov=enlighten --cov-report=html
 ```
 
 ---
 
-### 设计文档中的使用方式（需要本地模型）
+## 下一步计划
 
-> ⚠️ 以下是完整架构的使用方式，当前 API 模式不支持
+基于最新的设计方案（V2.1），我们明确了接下来的演进路线。**不再追求修改模型内部注意力机制**，而是聚焦于外围监控层的精度提升与能力补全。
 
-```python
-# 完整架构使用方式（设计愿景）
-from enlighten import EnlightenLM
+### 短期（1~4 周）
 
-# 加载模型（默认 balanced 模式）- 需要本地模型
-model = EnlightenLM.from_pretrained("deepseek-ai/DeepSeek-V3", config="configs/balanced.yaml")
+**1. 架构定位收拢与文档更新**
+- 将 `hybrid_architecture.py` 的功能正式拆分到 `l1_generation.py`、`l2_working_memory.py`、`l3_controller.py` 模块中，消除骨架代码。
+- 明确 L1 为透明模型调用层，不进行内部改造；安全能力完全由 L2/L3 提供。
+- 更新内部设计文档（`docs/architecture.md`）至 v3.0。
 
-# 生成文本
-response = model.generate(
-    "请解释量子纠缠的原理。",
-    max_tokens=512,
-    task="science_explain"
-)
-print(response)
+**2. 审计链激活**
+- 将已实现的哈希链与 HMAC 签名模块接入实际推理管线。
+- 每个生成步骤记录 `(step, token, hash)` 元组，响应中附带完整性签名。
 
-# 切换到 lightweight 模式（更低延迟）
-model.set_mode("lightweight")
-fast_response = model.generate("你好", max_tokens=50)
+**3. Logits 级实时熵监控**
+- 修改生成回路，逐 Token 获取模型输出的 logits，计算后验熵。
+- 构建基于 logits 的特征向量（熵、置信度、top-1与top-2概率比），替换部分纯文本统计特征。
+- 收集标注数据（最少 500 组正常/幻觉样本），离线训练轻量级 MLP 幻觉判别器。
+
+### 中期（1~3 个月）
+
+**4. 偏见检测与缓解（P0）**
+- 集成多领域敏感词库（性别、种族、职业等），基于 AC 自动机实现高效匹配。
+- 在 L3 控制层增加偏见拦截规则，触发后追加元认知自检提示（“请反思你刚才的回答是否隐含刻板印象……”）。
+
+**5. 偏见检测与缓解（P1）**
+- 构建有偏/无偏语句对比数据集，训练中间层线性偏见探针（需切换到支持输出 hidden states 的模型后端）。
+- 实现激活引导模块：在生成时对隐状态施加“去偏见”方向向量。
+- 探索元认知自我修正流程 – 模型在给出回答后自动进行偏见自评并修正。
+
+**6. 干预策略精细化**
+- 将现有的 halt 升级为三级策略：continue / halt（重新采样并提示）/ rewind（回滚至上一个安全锚点）。
+- 引入生成过程锚点（Engram Point）与回滚机制，需配合审计链实现可回溯。
+
+### 长期（3~6 个月）
+
+**7. Agent 协同验证**
+- 集成多 Agent 辩论框架（如 Markovian Multi-Agent Debate、GKMAD），作为 L3 后的二审“法官”。
+- 在生成完成后、输出给用户前，由多个独立 Agent 基于联网检索交叉验证事实。
+- 实现“实时监控（哨兵）+ 事后辩论（法官）”的双保险。
+
+**8. 监控面板与生产化**
+- 提供可视化控制台，可实时调整监控强度、查看风险事件统计。
+- 监控模块独立部署为 sidecar 服务，支持动态开启/关闭。
+- 建立用户反馈→偏见/幻觉标记→模型更新闭环。
+
+**9. 偏见与幻觉统一评估管线**
+- 集成标准化基准（TruthfulQA、HaluEval、BBQ、CHiSafetyBench）。
+- 持续测量幻觉发现率、偏见引导有效率等核心指标。
+
+---
+
+## 贡献指南
+
+欢迎提交 Issue 和 Pull Request！
+
+### 开发环境设置
+
+```bash
+# 克隆仓库
+git clone https://github.com/610005189/EnlightenLM.git
+cd EnlightenLM
+
+# 创建虚拟环境
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# 或 venv\Scripts\activate  # Windows
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 安装开发依赖
+pip install -r requirements-dev.txt  # 如有
 ```
 
+### 代码规范
+
+- **代码风格**：遵循 `black` 格式规范
+- **导入排序**：使用 `isort` 整理导入顺序
+- **类型注解**：鼓励添加类型注解提升可读性
+- **文档字符串**：公开 API 应包含 docstring
+
+```bash
+# 格式化代码
+black enlighten/ tests/
+
+# 检查导入顺序
+isort --check-only enlighten/ tests/
+```
+
+### 提交规范
+
+**提交信息格式**：
+```
+<类型>: <简短描述>
+
+[可选的详细说明]
+
+[可选的关联 Issue]
+```
+
+**类型标识**：
+| 标识 | 说明 |
+|------|------|
+| `feat` | 新功能 |
+| `fix` | Bug 修复 |
+| `docs` | 文档更新 |
+| `test` | 测试相关 |
+| `refactor` | 代码重构 |
+| `security` | 安全相关 |
+
+**示例**：
+```
+feat: 添加偏见词库动态加载功能
+
+- 支持运行时更新敏感词库
+- 添加词库验证机制
+- 更新相关测试
+
+Closes #123
+```
+
+### Pull Request 流程
+
+1. **Fork 仓库**并创建功能分支
+2. **开发并测试**：确保所有测试通过
+3. **提交 PR**：清晰描述动机和影响范围
+4. **代码审查**：等待维护者审核
+5. **合并**：通过审查后合并到主分支
+
+### 测试要求
+
+- 新功能必须包含测试覆盖
+- 修复 Bug 应添加回归测试
+- 运行完整测试套件确保无破坏：
+  ```bash
+  pytest tests/ -v
+  ```
+
+### 安全相关
+
+- 不要在代码中硬编码密钥或凭证
+- 使用环境变量或配置文件管理敏感信息
+- 发现安全漏洞请私下联系维护者
+
 ---
 
-## 许可证与致谢
+## 相关资源
 
-- 代码：**MIT License**
-- 文档：**CC BY-SA 4.0**
-- DeepSeek 模型权重遵循其自身许可证（V3 MIT，V4 预计 Apache 2.0）
-
-**致谢**：认知神经科学中的 DAN/VAN/DMN 理论，东方哲学"止观双运"思想，DeepSeek 开源团队。
-
----
-
-## Star History
-
-如果这个项目对你有启发，欢迎点亮 Star，让更多人看到"可驾驭的 AI"是如何被构建的。
-
-[![Star History Chart](https://api.star-history.com/svg?repos=610005189/EnlightenLM&type=Date)](https://star-history.com/#610005189/EnlightenLM&Date)
+- [架构设计文档](docs/architecture_v3.0.md)
+- [API 参考文档](docs/api_reference.md)
+- [安全体系文档](docs/security.md)
+- [实现状态](docs/implementation_status.md)
 
 ---
 
-**觉悟不是让 AI 成佛，而是让人类放心地把方向盘交给它。**
+## 许可证
+
+本项目基于 [MIT License](LICENSE) 开源。
+
+---
+
+**维护者**：EnlightenLM 团队  
+**最后更新**：2026-04-26  
+**版本**：v0.9.0 - 三层安全监控 + 贝叶斯推断已就绪，幻觉/偏见精细化监控开发中

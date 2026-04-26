@@ -46,6 +46,7 @@ from .l2_working_memory import L2WorkingMemory, SimplifiedL2, L2Output as Skelet
 from .memory.working_memory import WorkingMemory
 from .memory.entropy_tracker import EntropyTracker
 from .attention.sparse import SparseAttention
+from .audit.tee_audit import TEEAuditWriter
 
 
 @dataclass
@@ -744,6 +745,8 @@ class GenerationResult:
     van_event: bool
     security_verified: bool
     control_signals: Optional[Dict[str, Any]] = None
+    audit_signature: Optional[str] = None
+    audit_hash_chain: Optional[List[str]] = None
 
 
 @dataclass
@@ -1314,6 +1317,10 @@ class HybridEnlightenLM:
             enabled=config_dict.get("van_enabled", True)
         )
 
+        self.audit_writer = TEEAuditWriter(
+            output_path="logs/tee_audit"
+        )
+
         self.bayesian_l3 = None
         if self.use_bayesian_l3:
             self.bayesian_l3 = BayesianL3Controller()
@@ -1410,6 +1417,20 @@ class HybridEnlightenLM:
         should_block, block_reason, input_risk = self.van_monitor.check_input(prompt)
 
         if should_block:
+            audit_data = {
+                "session_id": id(self.working_memory),
+                "input_text": prompt,
+                "output_text": "[内容被安全监控系统拦截]",
+                "tokens": 0,
+                "entropy_stats": self.working_memory.compute_entropy_stats(),
+                "van_event": True,
+                "cutoff": True,
+                "cutoff_reason": block_reason
+            }
+            audit_entry = self.audit_writer.write_entry(audit_data)
+            audit_signature = audit_entry.current_hash
+            audit_hash_chain = [entry.current_hash for entry in self.audit_writer.get_entries()]
+
             return GenerationResult(
                 text="[内容被安全监控系统拦截]",
                 tokens=0,
@@ -1418,7 +1439,9 @@ class HybridEnlightenLM:
                 cutoff_reason=block_reason,
                 entropy_stats=self.working_memory.compute_entropy_stats(),
                 van_event=True,
-                security_verified=False
+                security_verified=False,
+                audit_signature=audit_signature,
+                audit_hash_chain=audit_hash_chain
             )
 
         self.working_memory.add_turn("user", prompt)
@@ -1453,6 +1476,20 @@ class HybridEnlightenLM:
             if self.use_l1_adapter and self.l1_adapter is not None:
                 l1_result = self._process_with_l1_adapter(output_text, entropy_stats)
                 if l1_result.get("van_event", False):
+                    audit_data = {
+                        "session_id": id(self.working_memory),
+                        "input_text": prompt,
+                        "output_text": "[内容被L1 VAN监控系统截断]",
+                        "tokens": tokens,
+                        "entropy_stats": l1_result.get("entropy_stats", entropy_stats),
+                        "van_event": True,
+                        "cutoff": True,
+                        "cutoff_reason": "L1 VAN event"
+                    }
+                    audit_entry = self.audit_writer.write_entry(audit_data)
+                    audit_signature = audit_entry.current_hash
+                    audit_hash_chain = [entry.current_hash for entry in self.audit_writer.get_entries()]
+
                     return GenerationResult(
                         text="[内容被L1 VAN监控系统截断 - VAN event detected]",
                         tokens=tokens,
@@ -1461,7 +1498,9 @@ class HybridEnlightenLM:
                         cutoff_reason="L1 VAN event",
                         entropy_stats=l1_result.get("entropy_stats", entropy_stats),
                         van_event=True,
-                        security_verified=False
+                        security_verified=False,
+                        audit_signature=audit_signature,
+                        audit_hash_chain=audit_hash_chain
                     )
                 van_event_flag = l1_result.get("van_event", False)
                 p_harm_value = l1_result.get("p_harm", 0.0)
@@ -1479,6 +1518,20 @@ class HybridEnlightenLM:
             control_signals_dict = self.l3_controller_adapter.get_control_signals_dict(l3_control_signals)
 
             if l3_control_signals.cutoff:
+                audit_data = {
+                    "session_id": id(self.working_memory),
+                    "input_text": prompt,
+                    "output_text": "[内容被L3元控制器截断]",
+                    "tokens": tokens,
+                    "entropy_stats": current_entropy_stats,
+                    "van_event": van_event_flag,
+                    "cutoff": True,
+                    "cutoff_reason": l3_control_signals.reason
+                }
+                audit_entry = self.audit_writer.write_entry(audit_data)
+                audit_signature = audit_entry.current_hash
+                audit_hash_chain = [entry.current_hash for entry in self.audit_writer.get_entries()]
+
                 return GenerationResult(
                     text="[内容被L3元控制器截断 - " + (l3_control_signals.reason or "高风险内容") + "]",
                     tokens=tokens,
@@ -1487,12 +1540,28 @@ class HybridEnlightenLM:
                     cutoff_reason=l3_control_signals.reason,
                     entropy_stats=current_entropy_stats,
                     van_event=van_event_flag,
-                    security_verified=False
+                    security_verified=False,
+                    audit_signature=audit_signature,
+                    audit_hash_chain=audit_hash_chain
                 )
 
         if self.use_l1_adapter and self.l1_adapter is not None:
             l1_result = self._process_with_l1_adapter(output_text, entropy_stats)
             if l1_result.get("van_event", False):
+                audit_data = {
+                    "session_id": id(self.working_memory),
+                    "input_text": prompt,
+                    "output_text": "[内容被L1 VAN监控系统截断]",
+                    "tokens": tokens,
+                    "entropy_stats": l1_result.get("entropy_stats", entropy_stats),
+                    "van_event": True,
+                    "cutoff": True,
+                    "cutoff_reason": "L1 VAN event"
+                }
+                audit_entry = self.audit_writer.write_entry(audit_data)
+                audit_signature = audit_entry.current_hash
+                audit_hash_chain = [entry.current_hash for entry in self.audit_writer.get_entries()]
+
                 return GenerationResult(
                     text="[内容被L1 VAN监控系统截断 - VAN event detected]",
                     tokens=tokens,
@@ -1501,7 +1570,9 @@ class HybridEnlightenLM:
                     cutoff_reason="L1 VAN event",
                     entropy_stats=l1_result.get("entropy_stats", entropy_stats),
                     van_event=True,
-                    security_verified=False
+                    security_verified=False,
+                    audit_signature=audit_signature,
+                    audit_hash_chain=audit_hash_chain
                 )
 
             if self.use_bayesian_l3 and self.bayesian_l3:
@@ -1512,6 +1583,20 @@ class HybridEnlightenLM:
                 )
 
                 if control_signals.cutoff:
+                    audit_data = {
+                        "session_id": id(self.working_memory),
+                        "input_text": prompt,
+                        "output_text": "[内容被贝叶斯L3监控系统截断]",
+                        "tokens": tokens,
+                        "entropy_stats": l1_result.get("entropy_stats", entropy_stats),
+                        "van_event": l1_result.get("van_event", False),
+                        "cutoff": True,
+                        "cutoff_reason": control_signals.reason
+                    }
+                    audit_entry = self.audit_writer.write_entry(audit_data)
+                    audit_signature = audit_entry.current_hash
+                    audit_hash_chain = [entry.current_hash for entry in self.audit_writer.get_entries()]
+
                     return GenerationResult(
                         text="[内容被贝叶斯L3监控系统截断 - " + (control_signals.reason or "高风险内容") + "]",
                         tokens=tokens,
@@ -1520,7 +1605,9 @@ class HybridEnlightenLM:
                         cutoff_reason=control_signals.reason,
                         entropy_stats=l1_result.get("entropy_stats", entropy_stats),
                         van_event=l1_result.get("van_event", False),
-                        security_verified=False
+                        security_verified=False,
+                        audit_signature=audit_signature,
+                        audit_hash_chain=audit_hash_chain
                     )
         elif not self.use_l3_controller:
             if self.use_bayesian_l3 and self.bayesian_l3:
@@ -1533,6 +1620,20 @@ class HybridEnlightenLM:
                 )
 
                 if control_signals.cutoff:
+                    audit_data = {
+                        "session_id": id(self.working_memory),
+                        "input_text": prompt,
+                        "output_text": "[内容被贝叶斯L3监控系统截断]",
+                        "tokens": tokens,
+                        "entropy_stats": entropy_stats,
+                        "van_event": van_event,
+                        "cutoff": True,
+                        "cutoff_reason": control_signals.reason
+                    }
+                    audit_entry = self.audit_writer.write_entry(audit_data)
+                    audit_signature = audit_entry.current_hash
+                    audit_hash_chain = [entry.current_hash for entry in self.audit_writer.get_entries()]
+
                     return GenerationResult(
                         text="[内容被贝叶斯L3监控系统截断 - " + (control_signals.reason or "高风险内容") + "]",
                         tokens=tokens,
@@ -1541,12 +1642,28 @@ class HybridEnlightenLM:
                         cutoff_reason=control_signals.reason,
                         entropy_stats=entropy_stats,
                         van_event=van_event,
-                        security_verified=False
+                        security_verified=False,
+                        audit_signature=audit_signature,
+                        audit_hash_chain=audit_hash_chain
                     )
             else:
                 should_cutoff, cutoff_reason, output_risk = self.van_monitor.check_output(output_text, entropy_stats)
 
                 if should_cutoff:
+                    audit_data = {
+                        "session_id": id(self.working_memory),
+                        "input_text": prompt,
+                        "output_text": "[内容被VAN监控系统截断]",
+                        "tokens": tokens,
+                        "entropy_stats": entropy_stats,
+                        "van_event": True,
+                        "cutoff": True,
+                        "cutoff_reason": cutoff_reason
+                    }
+                    audit_entry = self.audit_writer.write_entry(audit_data)
+                    audit_signature = audit_entry.current_hash
+                    audit_hash_chain = [entry.current_hash for entry in self.audit_writer.get_entries()]
+
                     return GenerationResult(
                         text="[内容被VAN监控系统截断 - " + cutoff_reason + "]",
                         tokens=tokens,
@@ -1555,11 +1672,27 @@ class HybridEnlightenLM:
                         cutoff_reason=cutoff_reason,
                         entropy_stats=entropy_stats,
                         van_event=True,
-                        security_verified=False
+                        security_verified=False,
+                        audit_signature=audit_signature,
+                        audit_hash_chain=audit_hash_chain
                     )
 
                 entropy_cutoff, entropy_reason = self.van_monitor.should_cutoff_by_entropy(entropy_stats)
                 if entropy_cutoff:
+                    audit_data = {
+                        "session_id": id(self.working_memory),
+                        "input_text": prompt,
+                        "output_text": "[内容因熵值异常被截断]",
+                        "tokens": tokens,
+                        "entropy_stats": entropy_stats,
+                        "van_event": True,
+                        "cutoff": True,
+                        "cutoff_reason": entropy_reason
+                    }
+                    audit_entry = self.audit_writer.write_entry(audit_data)
+                    audit_signature = audit_entry.current_hash
+                    audit_hash_chain = [entry.current_hash for entry in self.audit_writer.get_entries()]
+
                     return GenerationResult(
                         text="[内容因熵值异常被截断 - " + entropy_reason + "]",
                         tokens=tokens,
@@ -1568,7 +1701,9 @@ class HybridEnlightenLM:
                         cutoff_reason=entropy_reason,
                         entropy_stats=entropy_stats,
                         van_event=True,
-                        security_verified=False
+                        security_verified=False,
+                        audit_signature=audit_signature,
+                        audit_hash_chain=audit_hash_chain
                     )
 
         if enable_trace and trace_callback is not None:
@@ -1586,6 +1721,21 @@ class HybridEnlightenLM:
         elif self.use_l3_controller and self.l3_controller_adapter is not None:
             final_entropy_stats = self.working_memory.compute_entropy_stats()
 
+        audit_data = {
+            "session_id": id(self.working_memory),
+            "input_text": prompt,
+            "output_text": output_text,
+            "tokens": tokens,
+            "entropy_stats": final_entropy_stats,
+            "van_event": False,
+            "cutoff": False,
+            "control_signals": control_signals_dict if self.use_l3_controller else None
+        }
+
+        audit_entry = self.audit_writer.write_entry(audit_data)
+        audit_signature = audit_entry.current_hash
+        audit_hash_chain = [entry.current_hash for entry in self.audit_writer.get_entries()]
+
         return GenerationResult(
             text=output_text,
             tokens=tokens,
@@ -1595,7 +1745,9 @@ class HybridEnlightenLM:
             entropy_stats=final_entropy_stats,
             van_event=False,
             security_verified=True,
-            control_signals=control_signals_dict if self.use_l3_controller else None
+            control_signals=control_signals_dict if self.use_l3_controller else None,
+            audit_signature=audit_signature,
+            audit_hash_chain=audit_hash_chain
         )
 
     def _generate_local(
@@ -1869,7 +2021,7 @@ class HybridEnlightenLM:
                 "l2_result": l2_result
             }
         else:
-            self.working_memory.update_attention(attention_weights.detach() if isinstance(attention_weights, torch.Tensor) else attention_weights)
+            self.working_memory.update_attention(attention_weights)
             updated_entropy_stats = self.working_memory.compute_entropy_stats()
 
             return {
@@ -1946,6 +2098,25 @@ class HybridEnlightenLM:
             status["contextual_temperature"] = {"enabled": False}
 
         return status
+
+    def get_audit_log(self, limit: int = 100) -> Dict[str, Any]:
+        """
+        获取审计日志
+
+        Args:
+            limit: 返回数量限制
+
+        Returns:
+            Dict containing audit log entries
+        """
+        entries = self.audit_writer.get_entries()
+        recent_entries = entries[-limit:] if len(entries) > limit else entries
+
+        return {
+            "total_entries": len(entries),
+            "recent_entries": [entry.to_dict() for entry in recent_entries],
+            "chain_verified": self.audit_writer.verify_chain()
+        }
 
     def get_l3_trace_signals(self) -> Dict[str, float]:
         """
