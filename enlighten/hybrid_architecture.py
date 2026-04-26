@@ -140,7 +140,7 @@ class L2WorkingMemoryAdapter(nn.Module):
         sparse_k, sparse_v, active_indices = self.skeleton_l2.working_memory.get_sparse_kv()
 
         if attention_weights is not None:
-            self.skeleton_l2.entropy_tracker.update(attention_weights)
+            self.skeleton_l2.entropy_tracker.update_attention(attention_weights)
 
         entropy_stats = self.skeleton_l2.entropy_tracker.get_statistics()
 
@@ -282,7 +282,7 @@ class SimplifiedL2Adapter(nn.Module):
         if attention_weights is not None:
             if isinstance(attention_weights, torch.Tensor):
                 attention_weights = attention_weights.detach()
-            self.entropy_tracker.update(attention_weights)
+            self.entropy_tracker.update_attention(attention_weights)
 
         importance = torch.norm(hidden_states, dim=-1).mean(dim=0)
 
@@ -1254,7 +1254,9 @@ class HybridEnlightenLM:
         use_skeleton_l2: bool = False,
         l2_config: Optional[Dict] = None,
         use_contextual_temperature: bool = False,
-        temperature_config: Optional[TemperatureConfig] = None
+        temperature_config: Optional[TemperatureConfig] = None,
+        use_signal_preprocessor: bool = False,
+        signal_preprocessor_config: Optional[Dict] = None
     ):
         if config is None:
             config_dict = {}
@@ -1365,6 +1367,16 @@ class HybridEnlightenLM:
                 config=temperature_config,
                 tau_range=(0.1, 2.0)
             )
+
+        self.use_signal_preprocessor = use_signal_preprocessor
+        self.signal_preprocessor = None
+        if self.use_signal_preprocessor:
+            from .memory.signal_preprocessor import SignalAdaptivePreprocessor
+            self.signal_preprocessor = SignalAdaptivePreprocessor(
+                config=signal_preprocessor_config or {}
+            )
+            logger = __import__('logging').getLogger(__name__)
+            logger.info("Signal adaptive preprocessor enabled")
 
         if self.use_local_model:
             self._load_local_model()
@@ -1985,10 +1997,12 @@ class HybridEnlightenLM:
         attention_weights = l1_result["attention_weights"]
         if isinstance(attention_weights, torch.Tensor):
             attention_weights = attention_weights.float()
-            if attention_weights.ndim > 1:
+            if attention_weights.ndim == 1:
+                attention_weights = attention_weights.unsqueeze(0)
+            elif attention_weights.ndim == 2:
+                pass
+            elif attention_weights.ndim > 2:
                 attention_weights = attention_weights.mean(dim=-1)
-            else:
-                attention_weights = attention_weights.mean().unsqueeze(0)
 
         if self.l2_adapter is not None:
             hidden_states = l1_result["output_hidden"]
@@ -2142,6 +2156,64 @@ class HybridEnlightenLM:
             "k_H": entropy_stats["trend"],
             "p_harm_raw": last_risk
         }
+
+    def get_structured_features(self) -> Optional[Dict[str, Any]]:
+        """
+        获取预处理后的结构化特征
+
+        仅当启用信号预处理模块时可用
+
+        Returns:
+            包含 state, fft_features, laplace_features, z_features, raw_features 的字典
+            如果未启用预处理模块则返回 None
+        """
+        if self.signal_preprocessor is None:
+            return None
+
+        from .memory.signal_preprocessor import SignalWindow
+
+        entropy_stats = self.working_memory.compute_entropy_stats()
+
+        entropy_window = np.array(list(self.working_memory.entropy_history)[-32:])
+        confidence_window = np.array([entropy_stats.get("current", 0.5)] * len(entropy_window))
+
+        intervention_history = []
+        if hasattr(self.van_monitor, 'decision_history'):
+            for decision in self.van_monitor.decision_history[-32:]:
+                if decision.get("action") == "halt":
+                    intervention_history.append(1)
+                elif decision.get("action") == "rewind":
+                    intervention_history.append(2)
+                else:
+                    intervention_history.append(0)
+        else:
+            intervention_history = [0] * len(entropy_window)
+
+        if len(intervention_history) < len(entropy_window):
+            intervention_history = [0] * (len(entropy_window) - len(intervention_history)) + intervention_history
+        elif len(intervention_history) > len(entropy_window):
+            intervention_history = intervention_history[-len(entropy_window):]
+
+        window = SignalWindow(
+            entropy=entropy_window,
+            confidence=confidence_window,
+            interventions=np.array(intervention_history)
+        )
+
+        return self.signal_preprocessor.preprocess(window)
+
+    def get_active_features(self) -> Optional[Dict[str, float]]:
+        """
+        获取当前状态对应的活跃特征
+
+        Returns:
+            根据当前状态返回对应的活跃特征
+            如果未启用预处理模块则返回 None
+        """
+        structured_features = self.get_structured_features()
+        if structured_features is None:
+            return None
+        return self.signal_preprocessor.get_active_features(structured_features)
 
     def process_with_l2_adapter(
         self,

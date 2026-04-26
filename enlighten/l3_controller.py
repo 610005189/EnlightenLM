@@ -500,6 +500,11 @@ class BayesianL3Controller(nn.Module):
                 'mu_std': 0.01,
                 'obs_std': 0.02,
                 'step_gain': 2.0
+            },
+            'self_reference': {
+                'mu_std': 0.01,
+                'obs_std': 0.01,
+                'trend_gain': -0.2
             }
         }
 
@@ -507,6 +512,9 @@ class BayesianL3Controller(nn.Module):
         self.cooldown_counter = 0
         self.decision_history: List[DecisionRecord] = []
         self.step_counter = 0
+
+        # 连续截断信心机制
+        self.consecutive_confidence = ConsecutiveCutoffConfidence()
 
     def forward(
         self,
@@ -542,28 +550,51 @@ class BayesianL3Controller(nn.Module):
         }
 
         likelihoods = []
-        for condition in ['normal', 'noise_injection', 'bias_injection']:
+        for condition in ['normal', 'noise_injection', 'bias_injection', 'self_reference']:
             model = self.models[condition]
             if condition == 'normal':
                 lik = np.exp(-0.5 * (o_int['sigma_H2']/0.05)**2) * \
                       np.exp(-0.5 * (abs(o_int['k_H'])/0.1)**2)
             elif condition == 'noise_injection':
                 lik = np.exp(-0.5 * ((o_int['sigma_H2']-0.2)/0.1)**2)
-            else:
+            elif condition == 'bias_injection':
                 mu_lik = np.exp(-0.5 * ((o_int['mu_H']-0.2)/0.05)**2)
                 harm_lik = np.exp(-0.5 * ((o_int['p_harm_raw']-0.8)/0.1)**2)
                 trend_lik = np.exp(-0.5 * ((o_int['k_H']+0.1)/0.05)**2)
                 lik = mu_lik * harm_lik * trend_lik
+            elif condition == 'self_reference':
+                # 自指循环的特征：低熵、低方差、负趋势
+                mu_lik = np.exp(-0.5 * ((o_int['mu_H']-0.1)/0.05)**2)
+                var_lik = np.exp(-0.5 * ((o_int['sigma_H2']-0.01)/0.01)**2)
+                trend_lik = np.exp(-0.5 * ((o_int['k_H']+0.15)/0.05)**2)
+                lik = mu_lik * var_lik * trend_lik
+            else:
+                lik = 1.0
             likelihoods.append(lik)
 
         unnorm = self.p_H * np.array(likelihoods)
-        self.p_H = unnorm / unnorm.sum()
+        if unnorm.sum() > 0:
+            self.p_H = unnorm / unnorm.sum()
 
+        # 计算温度 - 基于病因后验概率
         tau_default = 1.0
-        tau = tau_default * (1.0 - 0.5 * self.p_H[2]) * (1.0 + 0.3 * self.p_H[1])
+        # 偏见注入时降低温度，噪声注入时提高温度
+        tau = tau_default * (1.0 - 0.6 * self.p_H[2]) * (1.0 + 0.4 * self.p_H[1])
+        # 自指循环时提高温度以打破循环
+        tau = tau * (1.0 + 0.5 * self.p_H[3])
         tau = np.clip(tau, 0.2, 2.0)
 
-        p_harm = self.p_H[2] * 0.5 + o_int['p_harm_raw'] * 0.5
+        # 计算有害概率
+        p_harm = self.p_H[2] * 0.6 + o_int['p_harm_raw'] * 0.4
+
+        # 连续截断信心更新
+        should_cutoff_initial = van_event or p_harm > 0.6 or o_int['p_harm_raw'] > 0.8
+        confidence_result = self.consecutive_confidence.update(
+            should_cutoff=should_cutoff_initial,
+            entropy_stats=entropy_stats,
+            van_event=van_event,
+            p_harm_raw=p_harm
+        )
 
         cutoff = False
         reason = None
@@ -571,13 +602,18 @@ class BayesianL3Controller(nn.Module):
             cutoff = True
             reason = "VAN event: sensitive content detected"
             self.cooldown_counter = self.cutoff_cooldown
-        elif p_harm > 0.6 or o_int['p_harm_raw'] > 0.8:
+        elif confidence_result['should_trust_cutoff']:
             cutoff = True
-            reason = f"High harm probability: {p_harm:.2f}"
+            reason = f"High harm probability: {p_harm:.2f}, confidence: {confidence_result['confidence']:.2f}"
             self.cooldown_counter = self.cutoff_cooldown
         elif self.cooldown_counter > 0:
             self.cooldown_counter -= 1
             reason = "Cooldown"
+        else:
+            # 检查是否需要否决截断
+            override, override_reason = self.consecutive_confidence.should_override_cutoff()
+            if override:
+                reason = f"Override: {override_reason}"
 
         self._record_decision(
             entropy_mean=o_int['mu_H'],
@@ -588,10 +624,23 @@ class BayesianL3Controller(nn.Module):
             reason=reason
         )
 
+        # 动态调整稀疏阈值和DMN系数
+        theta = 0.7
+        alpha = 0.1
+        
+        # 偏见注入时增加稀疏度
+        if self.p_H[2] > 0.5:
+            theta = min(0.9, theta + 0.2)
+            alpha = min(0.5, alpha + 0.3)
+        # 自指循环时降低稀疏度
+        elif self.p_H[3] > 0.5:
+            theta = max(0.5, theta - 0.2)
+            alpha = min(0.3, alpha + 0.2)
+
         return ControlSignals(
             tau=float(tau),
-            theta=0.7,
-            alpha=0.1,
+            theta=theta,
+            alpha=alpha,
             stability=not cutoff,
             cutoff=cutoff,
             reason=reason
@@ -642,7 +691,8 @@ class BayesianL3Controller(nn.Module):
         return {
             'normal': float(self.p_H[0]),
             'noise_injection': float(self.p_H[1]),
-            'bias_injection': float(self.p_H[2])
+            'bias_injection': float(self.p_H[2]),
+            'self_reference': float(self.p_H[3])
         }
 
     def reset(self) -> None:
@@ -650,10 +700,11 @@ class BayesianL3Controller(nn.Module):
         重置贝叶斯L3控制器状态
         """
         import numpy as np
-        self.p_H = np.array([0.8, 0.1, 0.1])
+        self.p_H = np.array([0.7, 0.1, 0.1, 0.1])  # 增加自指循环的先验概率
         self.cooldown_counter = 0
         self.decision_history = []
         self.step_counter = 0
+        self.consecutive_confidence.reset()
 
     def get_history(self, last_n: Optional[int] = None) -> List[DecisionRecord]:
         """
@@ -693,7 +744,8 @@ class BayesianL3Controller(nn.Module):
             "total_cooldowns": len(cooldowns),
             "cooldown_counter": self.cooldown_counter,
             "cutoff_ratio": len(cutoffs) / len(self.decision_history) if self.decision_history else 0,
-            "posterior": self.get_posterior()
+            "posterior": self.get_posterior(),
+            "confidence_statistics": self.consecutive_confidence.get_statistics()
         }
 
 

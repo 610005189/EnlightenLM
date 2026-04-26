@@ -10,6 +10,7 @@ FastAPI Service - API服务
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from fastapi import FastAPI, HTTPException, Request, Query, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -23,6 +24,39 @@ import os
 import time
 import psutil
 import asyncio
+
+# 添加 Prometheus 指标收集
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
+
+# 初始化 Prometheus 指标
+REQUESTS_TOTAL = Counter('enlightenlm_requests_total', 'Total number of requests')
+ERRORS_TOTAL = Counter('enlightenlm_errors_total', 'Total number of errors')
+VAN_EVENTS_TOTAL = Counter('enlightenlm_van_events_total', 'Total number of VAN events')
+CUTOFFS_TOTAL = Counter('enlightenlm_cutoffs_total', 'Total number of cutoffs')
+AUDIT_EVENTS_TOTAL = Counter('enlightenlm_audit_events_total', 'Total number of audit events')
+
+RESPONSE_TIME = Histogram('enlightenlm_response_time_seconds', 'Response time in seconds')
+RESPONSE_TIME_AVG = Gauge('enlightenlm_response_time_seconds_avg', 'Average response time in seconds')
+
+ENTROPY_MEAN = Gauge('enlightenlm_entropy_mean', 'Mean entropy value')
+ENTROPY_VARIANCE = Gauge('enlightenlm_entropy_variance', 'Entropy variance')
+
+CPU_USAGE = Gauge('enlightenlm_cpu_usage_percent', 'CPU usage percentage')
+MEMORY_USAGE = Gauge('enlightenlm_memory_usage_percent', 'Memory usage percentage')
+
+# 启动 Prometheus 指标服务器（延迟启动，从配置读取端口）
+_prometheus_started = False
+
+def start_prometheus_server(config: ModeConfig):
+    """启动 Prometheus 指标服务器，从配置读取端口"""
+    global _prometheus_started
+    if _prometheus_started:
+        return
+    
+    prometheus_port = getattr(config.performance, 'prometheus_port', 8001)
+    start_http_server(prometheus_port)
+    _prometheus_started = True
+    logger.info(f"Prometheus metrics server started on port {prometheus_port}")
 
 from .hybrid_architecture import HybridEnlightenLM, GenerationResult
 from .api.deepseek_client import DeepSeekAPIClient, DeepSeekConfig
@@ -222,6 +256,8 @@ def init_model():
     try:
         _config = get_mode_preset("balanced")
 
+        start_prometheus_server(_config)
+
         model_provider = _config.model_provider
         use_local = model_provider.use_local_model
 
@@ -248,7 +284,14 @@ def init_model():
             use_l3_controller=True,
             use_l1_adapter=False,
             use_skeleton_l2=True,
-            use_contextual_temperature=True
+            use_contextual_temperature=True,
+            use_signal_preprocessor=True,
+            signal_preprocessor_config={
+                'window_size': 32,
+                'discrete_threshold': 2,
+                'variance_threshold': 0.1,
+                'confidence_threshold': 0.8,
+            }
         )
 
         status = _model.get_status()
@@ -555,6 +598,9 @@ async def inference(request: InferenceRequest, req: Request):
         InferenceResponse: 推理响应
     """
     try:
+        # 增加请求计数
+        REQUESTS_TOTAL.inc()
+        
         start_time = time.time()
         request_id = str(uuid.uuid4())
 
@@ -580,6 +626,24 @@ async def inference(request: InferenceRequest, req: Request):
             )
 
             response_time = time.time() - start_time
+            
+            # 记录响应时间
+            RESPONSE_TIME.observe(response_time)
+            RESPONSE_TIME_AVG.set(response_time)
+            
+            # 记录 VAN 事件和截断事件
+            if result.van_event:
+                VAN_EVENTS_TOTAL.inc()
+            if result.cutoff:
+                CUTOFFS_TOTAL.inc()
+            
+            # 记录熵值统计
+            if hasattr(result, 'entropy_stats') and result.entropy_stats:
+                ENTROPY_MEAN.set(result.entropy_stats.get('mean', 0))
+                ENTROPY_VARIANCE.set(result.entropy_stats.get('variance', 0))
+            
+            # 记录审计事件
+            AUDIT_EVENTS_TOTAL.inc()
 
             if _autoscaler_enabled and _autoscaler:
                 _request_queue.get(request_id)
@@ -613,6 +677,10 @@ async def inference(request: InferenceRequest, req: Request):
                     }
                 )
 
+            # 更新系统资源使用情况
+            CPU_USAGE.set(psutil.cpu_percent(interval=0.01))
+            MEMORY_USAGE.set(psutil.virtual_memory().percent)
+
             return InferenceResponse(
                 session_id=session_id,
                 output=result.text,
@@ -628,6 +696,9 @@ async def inference(request: InferenceRequest, req: Request):
                 mode="local" if model.use_local_model else "api"
             )
         except Exception as e:
+            # 增加错误计数
+            ERRORS_TOTAL.inc()
+            
             # 生成失败时，仍然返回模型类型信息
             session_id = request.session_id or str(uuid.uuid4())
             
@@ -765,6 +836,26 @@ async def get_security_stats() -> Dict[str, Any]:
     }
 
 
+@app.get("/l3/structured-features")
+async def get_structured_features():
+    """获取L3结构化特征（信号自适应预处理）"""
+    if _model is None:
+        return {"error": "Model not initialized"}
+
+    structured_features = _model.get_structured_features()
+    if structured_features is None:
+        return {"error": "Signal preprocessor not enabled"}
+
+    return {
+        "state": structured_features.state.value,
+        "fft_features": structured_features.fft_features,
+        "laplace_features": structured_features.laplace_features,
+        "z_features": structured_features.z_features,
+        "raw_features": structured_features.raw_features,
+        "active_features": _model.get_active_features()
+    }
+
+
 @app.post("/security/reset")
 async def reset_security():
     """重置安全监控状态"""
@@ -786,6 +877,113 @@ async def verify_audit_chain():
         "verified": van_stats["block_ratio"] < 0.5,
         "message": f"VAN events: {van_stats['van_events']}, Blocked: {van_stats['blocked_requests']}",
         "details": van_stats
+    }
+
+
+@app.get("/api/v1/audit/logs")
+async def get_audit_logs(
+    session_id: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0
+):
+    """获取审计日志
+    
+    Args:
+        session_id: 可选的会话ID过滤
+        limit: 返回的最大条目数
+        offset: 分页偏移量
+    """
+    if _model is None:
+        return {"status": "error", "message": "Model not initialized"}
+    
+    if not hasattr(_model, 'audit_writer'):
+        return {"status": "error", "message": "Audit writer not initialized"}
+    
+    entries = _model.audit_writer.get_entries()
+    
+    # 按会话ID过滤
+    if session_id:
+        entries = [entry for entry in entries if entry.data.get("session_id") == session_id]
+    
+    # 分页
+    total = len(entries)
+    entries = entries[offset:offset + limit]
+    
+    # 转换为可序列化格式
+    serialized_entries = []
+    for entry in entries:
+        serialized = entry.to_dict()
+        # 转换时间戳为可读格式
+        if "timestamp" in serialized["header"]:
+            serialized["header"]["timestamp"] = datetime.fromtimestamp(
+                serialized["header"]["timestamp"]
+            ).isoformat()
+        serialized_entries.append(serialized)
+    
+    return {
+        "status": "success",
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "entries": serialized_entries
+    }
+
+
+@app.get("/api/v1/safety/config")
+async def get_safety_config():
+    """获取安全配置"""
+    if _model is None:
+        return {"status": "error", "message": "Model not initialized"}
+    
+    # 提取安全相关配置
+    safety_config = {
+        "van_sensitivity": getattr(_model.config, 'van_sensitivity', 0.7),
+        "self_reference_threshold": getattr(_model.config, 'self_reference_threshold', 0.8),
+        "max_repetition_ratio": getattr(_model.config, 'max_repetition_ratio', 0.3),
+        "cooling_window_seconds": getattr(_model.config, 'cooling_window_seconds', 60),
+        "hallucination_threshold": getattr(_model.config, 'hallucination_threshold', 0.7),
+        "entropy_threshold": getattr(_model.config, 'entropy_threshold', 0.3),
+        "variance_threshold": getattr(_model.config, 'variance_threshold', 0.05)
+    }
+    
+    return {
+        "status": "success",
+        "config": safety_config
+    }
+
+
+@app.put("/api/v1/safety/config")
+async def update_safety_config(
+    request: dict
+):
+    """更新安全配置
+    
+    Args:
+        request: 包含安全配置参数的字典
+    """
+    if _model is None:
+        return {"status": "error", "message": "Model not initialized"}
+    
+    # 允许更新的参数
+    allowed_params = [
+        'van_sensitivity',
+        'self_reference_threshold',
+        'max_repetition_ratio',
+        'cooling_window_seconds',
+        'hallucination_threshold',
+        'entropy_threshold',
+        'variance_threshold'
+    ]
+    
+    updated = {}
+    for param in allowed_params:
+        if param in request:
+            setattr(_model.config, param, request[param])
+            updated[param] = request[param]
+    
+    return {
+        "status": "success",
+        "updated": updated
     }
 
 

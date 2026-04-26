@@ -50,6 +50,7 @@ enlighten:
     target_latency_overhead: 0.10  # +10%
     target_memory_overhead_gb: 1.0
     target_repetition_rate: 0.03  # <3%
+    prometheus_port: 8001  # Prometheus 指标服务器端口
 
   logging:
     level: "WARNING"
