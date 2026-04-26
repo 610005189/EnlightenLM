@@ -53,7 +53,7 @@ def start_prometheus_server(config: ModeConfig):
     if _prometheus_started:
         return
     
-    prometheus_port = getattr(config.performance, 'prometheus_port', 8001)
+    prometheus_port = int(os.environ.get('PROMETHEUS_PORT', 8001))
     start_http_server(prometheus_port)
     _prometheus_started = True
     logger.info(f"Prometheus metrics server started on port {prometheus_port}")
@@ -276,11 +276,9 @@ def init_model():
                     raise RuntimeError("DeepSeek API is not available")
 
         _model = HybridEnlightenLM(
-            use_local_model=use_local,
-            local_model_name=model_provider.local_model_name,
             api_client=api_client,
             config=_config,
-            use_bayesian_l3=True,
+            use_bayesian_l3=False,
             use_l3_controller=True,
             use_l1_adapter=False,
             use_skeleton_l2=True,
@@ -770,18 +768,19 @@ async def switch_mode(request: ModeSwitchRequest):
                 )
 
         _model = HybridEnlightenLM(
-            use_local_model=use_local,
-            local_model_name=_config.model_provider.local_model_name if _config else "distilgpt2",
             api_client=api_client,
-            config={
-                "max_history": 100,
-                "context_window": 4096,
-                "entropy_window": 20,
-                "van_threshold": 0.7,
-                "entropy_threshold": 0.3,
-                "variance_threshold": 0.05,
-                "cooldown_steps": 5,
-                "van_enabled": True
+            config=_config,
+            use_bayesian_l3=False,
+            use_l3_controller=True,
+            use_l1_adapter=False,
+            use_skeleton_l2=True,
+            use_contextual_temperature=True,
+            use_signal_preprocessor=True,
+            signal_preprocessor_config={
+                'window_size': 32,
+                'discrete_threshold': 2,
+                'variance_threshold': 0.1,
+                'confidence_threshold': 0.8,
             }
         )
 

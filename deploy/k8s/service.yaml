@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: enlightenlm-service
+  namespace: default
+spec:
+  selector:
+    app: enlightenlm
+  ports:
+  - name: http
+    port: 80
+    targetPort: 80
+  - name: api
+    port: 8000
+    targetPort: 8000
+  type: LoadBalancer

@@ -37,3 +37,57 @@ groups:
         annotations:
           summary: "EnlightenLM 服务不可用"
           description: "EnlightenLM API 服务已停止运行超过 1 分钟"
+
+      - alert: EnlightenLMMemoryUsageHigh
+        expr: enlightenlm_memory_usage_percent > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "EnlightenLM 内存使用率过高"
+          description: "内存使用率 > 85%，当前值: {{ $value }}%"
+
+      - alert: EnlightenLMMemoryUsageCritical
+        expr: enlightenlm_memory_usage_percent > 95
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "EnlightenLM 内存使用率临界"
+          description: "内存使用率 > 95%，当前值: {{ $value }}%"
+
+      - alert: EnlightenLMCpuUsageHigh
+        expr: enlightenlm_cpu_usage_percent > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "EnlightenLM CPU 使用率过高"
+          description: "CPU 使用率 > 90%，当前值: {{ $value }}%"
+
+      - alert: EnlightenLMMetacognitionFailureHigh
+        expr: rate(enlightenlm_metacognition_failures_total[5m]) / rate(enlightenlm_metacognition_checks_total[5m]) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "EnlightenLM 元认知自检失败率过高"
+          description: "元认知自检失败率 > 20%，当前值: {{ $value | humanizePercentage }}"
+
+      - alert: EnlightenLMEngramRewindHigh
+        expr: rate(enlightenlm_engram_rewinds_total[5m]) > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "EnlightenLM Engram 回退频繁"
+          description: "Engram 回退率 > 10次/5分钟，当前值: {{ $value }}次/5分钟"
+
+      - alert: EnlightenLMEntropyAnomaly
+        expr: abs(enlightenlm_entropy_mean - avg(enlightenlm_entropy_mean[1h])) > 0.5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "EnlightenLM 熵值异常"
+          description: "熵值与过去1小时平均值偏差 > 0.5，当前值: {{ $value }}"

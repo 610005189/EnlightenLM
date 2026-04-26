@@ -1231,19 +1231,19 @@ class HybridEnlightenLM:
     支持本地模型和API调用，统一经过L2工作记忆和L3 VAN监控
 
     使用方式:
-        # API模式 (默认)
-        model = HybridEnlightenLM(use_local=False)
+        # 通过config配置模型（推荐）
+        config = load_config("balanced")
+        model = HybridEnlightenLM(config=config)
         result = model.generate("Hello")
 
-        # 本地模型模式
-        model = HybridEnlightenLM(use_local=True, local_model_name="distilgpt2")
+        # 也可以直接提供api_client
+        api_client = OllamaAPIClient(OllamaConfig(model="qwen2.5:14b"))
+        model = HybridEnlightenLM(api_client=api_client, config=config)
         result = model.generate("Hello")
     """
 
     def __init__(
         self,
-        use_local_model: bool = False,
-        local_model_name: str = "distilgpt2",
         api_client=None,
         config: Optional[Union[Dict, Any]] = None,
         use_bayesian_l3: bool = False,
@@ -1275,15 +1275,34 @@ class HybridEnlightenLM:
         else:
             config_dict = config
 
-        self.use_local_model = use_local_model
-        self.local_model_name = local_model_name
+        # 从配置中读取模型提供者设置
+        self.config = config
         self.api_client = api_client
         self.use_bayesian_l3 = use_bayesian_l3
         self.use_l1_adapter = use_l1_adapter
         self.use_skeleton_l2 = use_skeleton_l2
 
-        if not self.use_local_model and self.api_client is None:
-            self.api_client = OllamaAPIClient(OllamaConfig(model="qwen2.5:14b"))
+        # 从config.model_provider读取模型提供者配置
+        if hasattr(config, 'model_provider'):
+            model_provider = config.model_provider
+            self.use_local_model = model_provider.use_local_model
+            self.local_model_name = model_provider.local_model_name
+
+            # 如果没有提供api_client，从配置中创建
+            if not self.use_local_model and self.api_client is None:
+                api_provider = model_provider.api_provider
+                api_model = model_provider.api_model
+
+                if api_provider == "ollama":
+                    self.api_client = OllamaAPIClient(OllamaConfig(model=api_model))
+                # 可以添加其他API提供者的支持
+        else:
+            # 默认值
+            self.use_local_model = False
+            self.local_model_name = "distilgpt2"
+
+            if not self.use_local_model and self.api_client is None:
+                self.api_client = OllamaAPIClient(OllamaConfig(model="qwen2.5:14b"))
 
         self.working_memory = WorkingMemoryManager(
             max_history=config_dict.get("max_history", 100),

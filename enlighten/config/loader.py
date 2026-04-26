@@ -74,12 +74,9 @@ def _load_from_yaml(path: str) -> Dict[str, Any]:
     if 'enlighten' in data:
         data = data['enlighten']
 
-    if 'mode' in data and data['mode'] in ['full', 'balanced', 'lightweight']:
-        preset = get_mode_preset(data['mode'])
-        config = preset.to_dict()
-    else:
-        config = {}
+    config = {}
 
+    # 处理components
     components = data.get('components', {})
 
     if 'van_stream' in components:
@@ -102,6 +99,9 @@ def _load_from_yaml(path: str) -> Dict[str, Any]:
 
     if 'async_review' in components:
         config['async_review'] = components['async_review']
+
+    if 'model_provider' in components:
+        config['model_provider'] = components['model_provider']
 
     return config
 
@@ -137,6 +137,19 @@ def _load_from_env() -> Dict[str, Any]:
     if os.environ.get("ENLIGHTEN_ASYNC_REVIEW_ENABLED"):
         overrides.setdefault('async_review', {})['enabled'] = os.environ["ENLIGHTEN_ASYNC_REVIEW_ENABLED"].lower() == "true"
 
+    # 模型提供者配置
+    if os.environ.get("ENLIGHTEN_MODEL_USE_LOCAL"):
+        overrides.setdefault('model_provider', {})['use_local_model'] = os.environ["ENLIGHTEN_MODEL_USE_LOCAL"].lower() == "true"
+
+    if os.environ.get("ENLIGHTEN_MODEL_LOCAL_NAME"):
+        overrides.setdefault('model_provider', {})['local_model_name'] = os.environ["ENLIGHTEN_MODEL_LOCAL_NAME"]
+
+    if os.environ.get("ENLIGHTEN_MODEL_API_PROVIDER"):
+        overrides.setdefault('model_provider', {})['api_provider'] = os.environ["ENLIGHTEN_MODEL_API_PROVIDER"]
+
+    if os.environ.get("ENLIGHTEN_MODEL_API_MODEL"):
+        overrides.setdefault('model_provider', {})['api_model'] = os.environ["ENLIGHTEN_MODEL_API_MODEL"]
+
     return overrides
 
 
@@ -150,8 +163,9 @@ def _merge_config(base: ModeConfig, overrides: Dict[str, Any]) -> ModeConfig:
         if key == 'mode':
             continue
 
-        if key in ['working_memory', 'entropy_monitor', 'cutoff', 'async_review']:
+        if key in ['working_memory', 'entropy_monitor', 'cutoff', 'async_review', 'model_provider']:
             if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+                # 深度合并字典
                 merged[key] = {**merged[key], **value}
             else:
                 merged[key] = value

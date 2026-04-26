@@ -97,19 +97,15 @@ bias_strength:
 exception_tokens:
   - token: "[PAD]"
     action: "ignore"
-    description: "填充token，不参与注意力计算"
 
   - token: "[UNK]"
     action: "mask"
-    description: "未知token，强制mask"
 
   - token: "[CLS]"
     action: "use"
-    description: "分类token，用于池化输出"
 
   - token: "[SEP]"
     action: "use"
-    description: "分隔token，用于句子边界"
 
 # 敏感话题检测规则
 sensitive_topics:

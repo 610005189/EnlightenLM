@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: enlightenlm-config
+  namespace: default
+data:
+  mode: "full"
+  ollama_base_url: "http://ollama:11434"
+  prometheus_port: "8001"
+  log_level: "INFO"
+  max_concurrent_requests: "10"
+  request_timeout: "60"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: default
+data:
+  enlighten.conf: |
+    server {
+        listen 80;
+        server_name _;
+
+        location /health {
+            proxy_pass http://localhost:8000/health;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            access_log off;
+        }
+
+        location / {
+            limit_req zone=api_limit burst=20 nodelay;
+            limit_conn conn_limit 10;
+
+            proxy_pass http://localhost:8000;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Connection "";
+
+            proxy_connect_timeout 60s;
+            proxy_send_timeout 60s;
+            proxy_read_timeout 60s;
+
+            proxy_buffering on;
+            proxy_buffer_size 4k;
+            proxy_buffers 8 4k;
+            proxy_busy_buffers_size 8k;
+        }
+
+        location /metrics {
+            proxy_pass http://localhost:8001;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+        }
+    }

@@ -60,7 +60,7 @@ tasks/
 # Dot files and directories
 .github/
 .trae/
-.env.example
+
 .doc/
 .tasks/
 

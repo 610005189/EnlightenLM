@@ -13,7 +13,6 @@ task_types:
     temperature: 0.3         # 推荐温度
     sparse_threshold: 0.85    # 稀疏截断阈值
     cutoff_aggression: "high" # 截断激进程度
-    description: "数学推理任务需要高确定性和严格的安全控制"
 
   # 创意写作任务
   creative:
@@ -22,7 +21,6 @@ task_types:
     temperature: 1.0
     sparse_threshold: 0.5
     cutoff_aggression: "low"
-    description: "创意写作需要高随机性和宽松的安全控制"
 
   # 安全关键任务
   safety_critical:
@@ -31,7 +29,6 @@ task_types:
     temperature: 0.2
     sparse_threshold: 0.9
     cutoff_aggression: "maximum"
-    description: "安全关键任务需要最高级别的安全控制"
 
   # 代码生成任务
   code:
@@ -40,7 +37,6 @@ task_types:
     temperature: 0.4
     sparse_threshold: 0.75
     cutoff_aggression: "medium"
-    description: "代码生成需要结构化的推理过程"
 
   # 问答任务
   qa:
@@ -49,7 +45,6 @@ task_types:
     temperature: 0.5
     sparse_threshold: 0.7
     cutoff_aggression: "low"
-    description: "问答任务需要平衡准确性和多样性"
 
   # 对话任务
   chat:
@@ -58,7 +53,6 @@ task_types:
     temperature: 0.8
     sparse_threshold: 0.6
     cutoff_aggression: "low"
-    description: "对话任务需要自然流畅的输出"
 
 # 任务嵌入向量
 # 用于L3元控制器的任务识别

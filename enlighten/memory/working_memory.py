@@ -9,6 +9,7 @@ T3新增功能:
 """
 
 import torch
+import time
 import torch.nn as nn
 from typing import Tuple, List, Optional, Set
 from dataclasses import dataclass
@@ -147,12 +148,14 @@ class WorkingMemory(nn.Module):
     - 提供稀疏键值对 (K̃, Ṽ) 给L1
     - T3: 可配置刷新策略 (滑动窗口 + 定期TopK刷新)
     - T3: VAN敏感token保护
+    - T4: Engram锚点和rewind机制
 
     参数:
         memory_size: m 活跃token数量
         embedding_dim: d 嵌入维度
         use_topk_refresh: 是否启用定期TopK刷新
         refresh_interval: TopK刷新间隔步数
+        max_engrams: 最大Engram锚点数量
     """
 
     def __init__(
@@ -161,7 +164,8 @@ class WorkingMemory(nn.Module):
         embedding_dim: int = 1024,
         update_strategy: str = "topk",
         use_topk_refresh: bool = True,
-        refresh_interval: int = 32
+        refresh_interval: int = 32,
+        max_engrams: int = 10
     ):
         super().__init__()
         self.memory_size = memory_size
@@ -169,12 +173,14 @@ class WorkingMemory(nn.Module):
         self.update_strategy = update_strategy
         self.use_topk_refresh = use_topk_refresh
         self.refresh_interval = refresh_interval
+        self.max_engrams = max_engrams
 
         self.M = nn.Parameter(torch.zeros(memory_size, embedding_dim))
 
         self.active_indices: List[List[int]] = []
         self.importance_scores_history = []
         self.sensitive_indices: List[Set[int]] = []
+        self.engrams: List[dict] = []  # Engram锚点列表
 
         self.sliding_window = SlidingWindowRefresh(memory_size)
         self.topk_refresh = TopkRefresh(refresh_interval, memory_size)
@@ -347,8 +353,65 @@ class WorkingMemory(nn.Module):
         self.active_indices = []
         self.sensitive_indices = []
         self.importance_scores_history = []
+        self.engrams = []  # 重置Engram锚点
         self.refresh_triggered = False
         self.initialized = torch.tensor(False)
+
+    def create_engram(self, name: str = None) -> int:
+        """
+        创建Engram锚点
+
+        Args:
+            name: 锚点名称（可选）
+
+        Returns:
+            int: Engram索引
+        """
+        engram = {
+            'name': name or f'engram_{len(self.engrams)}',
+            'memory': self.M.data.clone(),
+            'active_indices': [list(idx) for idx in self.active_indices],
+            'sensitive_indices': [list(idx) for idx in self.sensitive_indices],
+            'timestamp': torch.cuda.current_time() if torch.cuda.is_available() else time.time()
+        }
+
+        # 保持Engram数量不超过最大值
+        if len(self.engrams) >= self.max_engrams:
+            self.engrams.pop(0)  # 移除最早的Engram
+
+        self.engrams.append(engram)
+        return len(self.engrams) - 1
+
+    def rewind_to_engram(self, engram_index: int) -> bool:
+        """
+        回退到指定的Engram锚点
+
+        Args:
+            engram_index: Engram索引
+
+        Returns:
+            bool: 回退是否成功
+        """
+        if 0 <= engram_index < len(self.engrams):
+            engram = self.engrams[engram_index]
+            self.M.data = engram['memory']
+            self.active_indices = [list(idx) for idx in engram['active_indices']]
+            self.sensitive_indices = [set(idx) for idx in engram['sensitive_indices']]
+            return True
+        return False
+
+    def list_engrams(self) -> List[dict]:
+        """
+        列出所有Engram锚点
+
+        Returns:
+            List[dict]: Engram锚点列表
+        """
+        return [{
+            'index': i,
+            'name': engram['name'],
+            'timestamp': engram['timestamp']
+        } for i, engram in enumerate(self.engrams)]
 
     def get_sparse_kv(self) -> Tuple[torch.Tensor, torch.Tensor, List[List[int]]]:
         """
@@ -369,6 +432,7 @@ class WorkingMemory(nn.Module):
             'memory': self.M.data.clone(),
             'active_indices': [list(idx) for idx in self.active_indices],
             'sensitive_indices': [list(idx) for idx in self.sensitive_indices],
+            'engrams': self.engrams,  # 包含Engram锚点
             'memory_size': self.memory_size,
             'embedding_dim': self.embedding_dim
         }
@@ -381,6 +445,8 @@ class WorkingMemory(nn.Module):
         self.active_indices = [list(idx) for idx in snapshot['active_indices']]
         if 'sensitive_indices' in snapshot:
             self.sensitive_indices = [set(idx) for idx in snapshot['sensitive_indices']]
+        if 'engrams' in snapshot:
+            self.engrams = snapshot['engrams']
 
 
 class MemoryBuffer(nn.Module):

@@ -33,8 +33,7 @@ class TestFullIntegration:
         
         model = HybridEnlightenLM(
             config=config,
-            model_name="llama3:latest",
-            model_type="ollama"
+            use_local_model=False
         )
         return model
 

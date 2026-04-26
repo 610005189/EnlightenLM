@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: enlightenlm
+  namespace: default
+  labels:
+    app: enlightenlm
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: enlightenlm
+  template:
+    metadata:
+      labels:
+        app: enlightenlm
+    spec:
+      containers:
+      - name: enlightenlm-api
+        image: enlightenlm:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000
+        resources:
+          requests:
+            cpu: "1"
+            memory: "4Gi"
+          limits:
+            cpu: "2"
+            memory: "8Gi"
+        env:
+        - name: MODE
+          valueFrom:
+            configMapKeyRef:
+              name: enlightenlm-config
+              key: mode
+        - name: DEEPSEEK_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: enlightenlm-secrets
+              key: deepseek_api_key
+        - name: OLLAMA_BASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: enlightenlm-config
+              key: ollama_base_url
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+      - name: nginx-sidecar
+        image: nginx:1.21-alpine
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/conf.d
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+      volumes:
+      - name: nginx-config
+        configMap:
+          name: nginx-config

@@ -1,6 +1,5 @@
 enlighten:
   mode: "full"
-  description: "Full模式 - 最高安全级别，三级VAN漏斗完整启用"
 
   components:
     van_stream:
@@ -28,32 +27,19 @@ enlighten:
       capacity: 512
       refresh_interval: 32
       use_topk_refresh: true
-      embedding_dim: 1024
 
     entropy_monitor:
       window_size: 20
-      alert_threshold: 0.3
 
     cutoff:
       low_entropy_threshold: 0.5
       low_variance_threshold: 0.05
       min_duration: 5
       cooldown_steps: 10
-      flicker_window_size: 5
-      flicker_threshold: 0.6
 
     async_review:
       enabled: true
       model: "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
       interval: 32
       queue_size: 100
-
-  performance:
-    target_latency_overhead: 0.15  # +15%
-    target_memory_overhead_gb: 1.5
-    target_repetition_rate: 0.02  # <2%
-
-  logging:
-    level: "INFO"
-    log_decisions: true
     log_history_size: 1000

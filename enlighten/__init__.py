@@ -7,6 +7,7 @@ EnlightenLM - 觉悟三层架构
 - WorkingMemoryManager: L2工作记忆层
 - VANMonitor: L3安全监控
 - API Server: FastAPI 服务
+- MetaCognition: 元认知自检模块
 """
 
 __version__ = "2.3.0"
@@ -27,16 +28,19 @@ from .config.modes import (
     ModelProviderConfig,
 )
 from .config.loader import load_config, ConfigManager
+from .metacognition import MetaCognition, MetaCognitionConfig, SelfCheckResult
 
 __all__ = [
     # 核心类
     "HybridEnlightenLM",
     "WorkingMemoryManager",
     "VANMonitor",
+    "MetaCognition",
     
     # 数据类
     "GenerationResult",
     "AttentionStats",
+    "SelfCheckResult",
     
     # 配置
     "EnlightenMode",
@@ -45,6 +49,7 @@ __all__ = [
     "EntropyMonitorConfig",
     "CutoffConfig",
     "ModelProviderConfig",
+    "MetaCognitionConfig",
     "load_config",
     "ConfigManager",
 ]
