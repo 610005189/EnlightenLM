@@ -57,6 +57,9 @@ Thumbs.db
 # Tasks directory
 tasks/
 
+# Plans directory
+docs/plans/
+
 # Dot files and directories
 .github/
 .trae/

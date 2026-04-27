@@ -1422,15 +1422,19 @@ class HybridEnlightenLM:
             logger.info("Signal adaptive preprocessor enabled")
 
         # 初始化幻觉判别器
-        self.use_hallucination_discriminator = True  # 启用幻觉判别器
+        # 优先级：配置文件 > 环境变量 > 默认值
+        use_discriminator = config_dict.get('use_hallucination_discriminator', os.getenv('ENLIGHTEN_USE_HALLUCINATION_DISCRIMINATOR', 'true').lower() == 'true')
+        self.use_hallucination_discriminator = use_discriminator
         self.hallucination_discriminator = None
         try:
             from .memory.hallucination_discriminator import HallucinationDiscriminator, HallucinationDiscriminatorConfig
             model_path = "./models/hallucination_discriminator_50.pt"  # 使用训练好的模型
             if os.path.exists(model_path):
+                # 优先级：配置文件 > 环境变量 > 默认值
+                threshold = config_dict.get("hallucination_threshold", float(os.getenv('ENLIGHTEN_HALLUCINATION_THRESHOLD', '0.7')))
                 discriminator_config = HallucinationDiscriminatorConfig(
                     model_path=model_path,
-                    threshold=config_dict.get("hallucination_threshold", 0.7)
+                    threshold=threshold
                 )
                 self.hallucination_discriminator = HallucinationDiscriminator(discriminator_config)
                 logger = __import__('logging').getLogger(__name__)

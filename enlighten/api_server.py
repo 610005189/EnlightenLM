@@ -1161,7 +1161,21 @@ async def get_autoscaler_metrics():
 
 @app.get("/")
 async def root():
-    """根路径"""
+    """根路径 - 重定向到聊天界面"""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/chat.html")
+
+
+@app.get("/chat.html")
+async def chat_page():
+    """聊天页面"""
+    from fastapi.responses import FileResponse
+    return FileResponse("static/chat.html")
+
+
+@app.get("/api/info")
+async def api_info():
+    """API信息"""
     mode = "unknown"
     if _model is not None:
         mode = "local" if _model.use_local_model else "api"
@@ -1178,13 +1192,6 @@ async def root():
         },
         "security": "启用"
     }
-
-
-@app.get("/chat.html")
-async def chat_page():
-    """聊天页面"""
-    from fastapi.responses import FileResponse
-    return FileResponse("docs/chat.html")
 
 
 def run_server(host: str = "0.0.0.0", port: int = 8000):

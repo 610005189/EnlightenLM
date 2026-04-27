@@ -1,6 +1,6 @@
 # EnlightenLM 管理员指南
 
-> 版本: v3.0
+> 版本: v2.5.0
 > 更新日期: 2026-04-26
 > 状态: 正式版
 
@@ -69,7 +69,7 @@ EnlightenLM 采用模型无关的三层架构：
    ```
 
 3. **访问服务**
-   - Web 界面：`http://localhost:8000/chat.html`
+   - Web 界面：`http://localhost:8000/` (聊天界面)
    - API 接口：`http://localhost:8000/inference`
    - 监控：`http://localhost:9090` (Prometheus)
    - 仪表板：`http://localhost:3000` (Grafana)

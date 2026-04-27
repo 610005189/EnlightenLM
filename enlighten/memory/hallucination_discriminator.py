@@ -127,15 +127,30 @@ class HallucinationDiscriminator(nn.Module):
         Returns:
             幻觉风险概率批次
         """
-        # 确保输入是张量
-        if not isinstance(feature_vectors, torch.Tensor):
+        # 输入验证
+        if feature_vectors is None:
+            raise ValueError("特征向量不能为空")
+
+        # 统一输入处理逻辑
+        if isinstance(feature_vectors, (list, np.ndarray)):
             feature_vectors = torch.tensor(feature_vectors, dtype=torch.float32)
+        elif not isinstance(feature_vectors, torch.Tensor):
+            raise TypeError("特征向量必须是张量、列表或numpy数组")
+        
+        # 检查特征维度
+        if len(feature_vectors.shape) == 1:
+            # 如果是单个样本，添加批次维度
+            feature_vectors = feature_vectors.unsqueeze(0)
+        elif len(feature_vectors.shape) != 2:
+            raise ValueError("特征向量必须是 2D 张量 (batch_size, input_dim)")
         
         # 前向传播
         output = self.model(feature_vectors)
         
         # 返回概率值
         return output
+    
+
     
     def predict(self, features: HallucinationFeatures) -> Dict[str, Any]:
         """

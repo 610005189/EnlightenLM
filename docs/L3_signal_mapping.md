@@ -227,7 +227,7 @@ def classify_hypothesis(entropy_stats, van_risk):
 
 ---
 
-**文档版本**: v1.0
+**文档版本**: v2.5.0
 **创建日期**: 2026-04-24
 **关联论文**: docs/paper/元认知动态调节消解智能体偏见与幻觉的猜想.md
 **关联计划**: docs/L3优化计划.md
