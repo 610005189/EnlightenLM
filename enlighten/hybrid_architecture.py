@@ -1422,17 +1422,30 @@ class HybridEnlightenLM:
             logger.info("Signal adaptive preprocessor enabled")
 
         # 初始化幻觉判别器
-        self.use_hallucination_discriminator = config_dict.get("use_hallucination_discriminator", False)
+        self.use_hallucination_discriminator = True  # 启用幻觉判别器
         self.hallucination_discriminator = None
-        if self.use_hallucination_discriminator:
+        try:
             from .memory.hallucination_discriminator import HallucinationDiscriminator, HallucinationDiscriminatorConfig
-            discriminator_config = HallucinationDiscriminatorConfig(
-                model_path=config_dict.get("hallucination_model_path", None),
-                threshold=config_dict.get("hallucination_threshold", 0.7)
-            )
-            self.hallucination_discriminator = HallucinationDiscriminator(discriminator_config)
+            model_path = "./models/hallucination_discriminator_50.pt"  # 使用训练好的模型
+            if os.path.exists(model_path):
+                discriminator_config = HallucinationDiscriminatorConfig(
+                    model_path=model_path,
+                    threshold=config_dict.get("hallucination_threshold", 0.7)
+                )
+                self.hallucination_discriminator = HallucinationDiscriminator(discriminator_config)
+                logger = __import__('logging').getLogger(__name__)
+                logger.info("Hallucination discriminator enabled with trained model")
+            else:
+                from .memory.hallucination_discriminator import SimpleHallucinationDetector
+                self.hallucination_discriminator = SimpleHallucinationDetector()
+                logger = __import__('logging').getLogger(__name__)
+                logger.warning("Hallucination discriminator enabled with rule-based detector (model not found)")
+        except Exception as e:
+            from .memory.hallucination_discriminator import SimpleHallucinationDetector
+            self.hallucination_discriminator = SimpleHallucinationDetector()
             logger = __import__('logging').getLogger(__name__)
-            logger.info("Hallucination discriminator enabled")
+            logger.error(f"Failed to initialize hallucination discriminator: {e}")
+            logger.info("Hallucination discriminator enabled with rule-based detector")
 
         if self.use_local_model:
             self._load_local_model()

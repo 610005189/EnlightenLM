@@ -117,6 +117,26 @@ class HallucinationDiscriminator(nn.Module):
         # 返回概率值
         return output.item()
     
+    def forward_batch(self, feature_vectors):
+        """
+        批量前向传播
+        
+        Args:
+            feature_vectors: 特征向量批次，形状为 (batch_size, input_dim)
+            
+        Returns:
+            幻觉风险概率批次
+        """
+        # 确保输入是张量
+        if not isinstance(feature_vectors, torch.Tensor):
+            feature_vectors = torch.tensor(feature_vectors, dtype=torch.float32)
+        
+        # 前向传播
+        output = self.model(feature_vectors)
+        
+        # 返回概率值
+        return output
+    
     def predict(self, features: HallucinationFeatures) -> Dict[str, Any]:
         """
         预测幻觉风险
