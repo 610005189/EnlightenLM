@@ -77,7 +77,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="EnlightenLM API", version="1.0.0", description="混合架构三层安全监控")
 
 # 静态文件服务
-app.mount("/static", StaticFiles(directory="docs"), name="static")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.add_middleware(
     CORSMiddleware,
