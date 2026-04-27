@@ -67,3 +67,17 @@ tasks/
 # Results directory
 results/
 
+# Models directory
+models/
+
+# Data directory
+data/
+
+# Test scripts
+test_system.py
+generate_sample_data.py
+download_datasets.py
+
+# Virtual environment
+.venv/
+
